@@ -28,7 +28,7 @@
 | 推送測試接收端（只記錄、不開閘） | [tools/capture_server.py](tools/capture_server.py) |
 | ⚠️ 開閘試驗程式（會下開閘指令，只用在沒接柵欄的桌上攝影機） | [tools/gate_trial_server.py](tools/gate_trial_server.py)：`python gate_trial_server.py 1～6`，每次心跳都回一種開閘候選格式（不必辨識車牌）；紀錄在 `tools/captures_gate_trial/` |
 | 攝影機後台 IO、黑白名單設定頁截圖 | [參考資料/攝影機外部設備IO設定頁.png](參考資料/攝影機外部設備IO設定頁.png)、[參考資料/攝影機黑白名單設定頁.png](參考資料/攝影機黑白名單設定頁.png) |
-| ⚠️ 白名單寫入試驗程式（會改攝影機白名單，只用在沒接柵欄的桌上攝影機） | [tools/whitelist_trial_server.py](tools/whitelist_trial_server.py)：`python whitelist_trial_server.py 1｜2 車牌 [delete]`，前 3 次心跳回覆 `white_list_operate`（推測格式），再到後台白名單清單看有沒有多一筆；紀錄在 `tools/captures_whitelist_trial/` |
+| ⚠️ 白名單寫入試驗程式（會改攝影機白名單，只用在沒接柵欄的桌上攝影機） | [tools/whitelist_trial_server.py](tools/whitelist_trial_server.py)：`python whitelist_trial_server.py 候選(1～4) 車牌 add｜update｜delete`，前 3 次心跳回覆 `white_list_operate`（推測格式），再到後台白名單清單看有沒有多一筆；紀錄在 `tools/captures_whitelist_trial/` |
 | **實機推送格式（2026-11-02 實測）** | [協議實測紀錄.md](協議實測紀錄.md)；原始紀錄在 `tools/captures/`（含照片，屬個資） |
 | 攝影機後台「設備訊息」截圖 | [參考資料/攝影機設備資訊.png](參考資料/攝影機設備資訊.png) |
 | 攝影機後台「HTTP POST」設定頁截圖 | [參考資料/攝影機HTTP_POST設定頁.png](參考資料/攝影機HTTP_POST設定頁.png) |
@@ -120,6 +120,7 @@
 - **攝影機網頁後台沒有白名單清單／新增功能**：只有黑白名單規則頁（`black_white.html`，只設開閘模式、輸出口、比對規則）。查過後台網頁程式（`http://192.168.1.100:8000`，只讀）也沒有白名單操作的指令。判斷白名單條目只能靠 SDK、廠商電腦工具或平台協議寫入；老闆之前是用「對岸的機器」寫的。
 - 驗證方法：拿車牌照片對鏡頭，看後台「即時影像」的辨識列表「黑白名單」欄，或推送的 `is_whitelist`。
 - **結論：白名單寫入不再用猜的，等廠商文件**（HTTP 1.12 的白名單操作格式、MQTT 協議、SDK）。也可以問老闆之前用什麼軟體寫入白名單。
+- **RYW 決定：先搞定白名單增刪再繼續其他開發。** 網路查到華夏 2018 年「HTTP POST 功能模式說明」（https://blog.csdn.net/weixin_34248258/article/details/93819587）：心跳／辨識回覆帶 `whitelist_opt_data`，Action＝add／update／delete／deleteAll／query，欄位 PlateNumber、Type（W／B）、Start／End（`YYYY/MM/DD HH:MM:SS`）。該文件的開閘寫法（`ext` device IO1）跟我們實測有效的 `gpio_data` 不同，版本可能較舊。試驗程式已加候選 3（這個格式）與候選 4（另一款一體機的 addWhiteList／deleteWhiteList），用法：`python whitelist_trial_server.py 3 S30438 update｜delete｜add`。待實機測試。
 - 照片查看（RYW 2026-11-02 提問）：攝影機有 SD 卡，後台有「圖片預覽」頁，透過遠端桌面連到社區網路應該看得到；平台能否遠端取回 SD 卡照片未知，待問廠商（後台另有 FTP 上傳功能可參考）。
 - 其他連帶：LED／語音改由攝影機自己的設定處理（後台有「字幕機參數」）；平台以推送裡的 `is_whitelist` 記錄攝影機有沒有放行；要確認斷網續傳（補傳紀錄）的格式。
 - 設計文件與資料表要跟著改：access_events 的「開閘方式」改記攝影機判斷結果；cameras 要記白名單同步狀態。
