@@ -120,7 +120,8 @@
 - **攝影機網頁後台沒有白名單清單／新增功能**：只有黑白名單規則頁（`black_white.html`，只設開閘模式、輸出口、比對規則）。查過後台網頁程式（`http://192.168.1.100:8000`，只讀）也沒有白名單操作的指令。判斷白名單條目只能靠 SDK、廠商電腦工具或平台協議寫入；老闆之前是用「對岸的機器」寫的。
 - 驗證方法：拿車牌照片對鏡頭，看後台「即時影像」的辨識列表「黑白名單」欄，或推送的 `is_whitelist`。
 - **結論：白名單寫入不再用猜的，等廠商文件**（HTTP 1.12 的白名單操作格式、MQTT 協議、SDK）。也可以問老闆之前用什麼軟體寫入白名單。
-- **RYW 決定：先搞定白名單增刪再繼續其他開發。** 網路查到華夏 2018 年「HTTP POST 功能模式說明」（https://blog.csdn.net/weixin_34248258/article/details/93819587）：心跳／辨識回覆帶 `whitelist_opt_data`，Action＝add／update／delete／deleteAll／query，欄位 PlateNumber、Type（W／B）、Start／End（`YYYY/MM/DD HH:MM:SS`）。該文件的開閘寫法（`ext` device IO1）跟我們實測有效的 `gpio_data` 不同，版本可能較舊。試驗程式已加候選 3（這個格式）與候選 4（另一款一體機的 addWhiteList／deleteWhiteList），用法：`python whitelist_trial_server.py 3 S30438 update｜delete｜add`。待實機測試。
+- **RYW 決定：先搞定白名單增刪再繼續其他開發。** 網路查到華夏 2018 年「HTTP POST 功能模式說明」（https://blog.csdn.net/weixin_34248258/article/details/93819587）：心跳／辨識回覆帶 `whitelist_opt_data`，Action＝add／update／delete／deleteAll／query，欄位 PlateNumber、Type（W／B）、Start／End（`YYYY/MM/DD HH:MM:SS`）。該文件的開閘寫法（`ext` device IO1）跟我們實測有效的 `gpio_data` 不同，版本可能較舊。試驗程式已加候選 3（這個格式）與候選 4（另一款一體機的 addWhiteList／deleteWhiteList），用法：`python whitelist_trial_server.py 3 S30438 update｜delete｜add`。
+- 13:37～13:41 實測候選 3（update、add、delete）、候選 4（delete）：**都無效**。**重要線索**：回覆沒有 `error_num` 的（候選 3、4），攝影機約 30 毫秒內就重送心跳＝不接受這個回覆；有 `error_num` 的（候選 1、開閘的 gpio_data）照常 10 秒一次＝接受。推測 1.12 版回覆一定要有 `error_num`。已加候選 5、6（error_num＋whitelist_opt_data，日期分別用 / 和 -），待測。判斷方式：除了看黑白名單欄，也看心跳有沒有立刻重送（`captures_whitelist_trial` 檔名時間）。
 - 照片查看（RYW 2026-11-02 提問）：攝影機有 SD 卡，後台有「圖片預覽」頁，透過遠端桌面連到社區網路應該看得到；平台能否遠端取回 SD 卡照片未知，待問廠商（後台另有 FTP 上傳功能可參考）。
 - 其他連帶：LED／語音改由攝影機自己的設定處理（後台有「字幕機參數」）；平台以推送裡的 `is_whitelist` 記錄攝影機有沒有放行；要確認斷網續傳（補傳紀錄）的格式。
 - 設計文件與資料表要跟著改：access_events 的「開閘方式」改記攝影機判斷結果；cameras 要記白名單同步狀態。

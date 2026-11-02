@@ -52,6 +52,14 @@ def candidate(n, plate, action):
             return {"deleteWhiteList": {"del_data": [{"carnum": plate}]}}
         stamp = lambda t: t.replace("-", "").replace(" ", "").replace(":", "")
         return {"addWhiteList": {"add_data": [{"carnum": plate, "startime": stamp(START), "endtime": stamp(END)}]}}
+    # 2026-11-02 實測：回覆沒有 error_num 時（候選 3、4），攝影機會立刻重送心跳＝不接受這個回覆；
+    # 有 error_num 時（候選 1、開閘）照常 10 秒一次。所以 5、6 是「error_num＋候選 3 的白名單內容」
+    if n in (5, 6):
+        entry = {"Action": action, "PlateNumber": plate}
+        if action != "delete":
+            fmt = (lambda t: t.replace("-", "/")) if n == 5 else (lambda t: t)
+            entry.update(Type="W", Start=fmt(START), End=fmt(END))
+        return {"error_num": 0, "error_str": "noerror", "whitelist_opt_data": [entry]}
     return None
 
 
@@ -60,6 +68,8 @@ CANDIDATE_NAMES = {
     2: "white_list_operate，只帶車牌與啟用",
     3: "華夏 whitelist_opt_data（Action／PlateNumber／Type／Start／End）",
     4: "addWhiteList／deleteWhiteList（carnum／startime／endtime）",
+    5: "error_num＋華夏 whitelist_opt_data（日期用 /）",
+    6: "error_num＋華夏 whitelist_opt_data（日期用 -）",
 }
 
 
