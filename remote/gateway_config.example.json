@@ -1,0 +1,8 @@
+{
+  "server": "https://平台網址（在家測試時是 cloudflared 給的網址）",
+  "gateway_id": "company",
+  "token": "跟平台 server_config.json 裡這台小主機的 token 一樣（至少 24 字元，不要外流）",
+  "cameras": [
+    {"id": "lane1", "name": "公司測試車道", "ip": "192.168.1.100", "photo_port": 80}
+  ]
+}

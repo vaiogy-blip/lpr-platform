@@ -4,8 +4,20 @@
     {
       "name": "whitelist-app",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["tools/whitelist_app.py", "--no-browser"],
+      "runtimeArgs": [
+        "tools/whitelist_app.py",
+        "--no-browser"
+      ],
       "port": 8090
+    },
+    {
+      "name": "ps-platform",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "remote/server.py"
+      ],
+      "port": 8600,
+      "autoPort": false
     }
   ]
 }

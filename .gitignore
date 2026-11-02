@@ -9,3 +9,9 @@ __pycache__/
 build/
 dist/
 *.spec
+
+# 遠端平台：密碼雜湊、token、稽核紀錄不上傳
+remote/server_config.json
+remote/gateway_config.json
+remote/data/
+remote/*.log

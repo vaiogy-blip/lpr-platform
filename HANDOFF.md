@@ -151,6 +151,16 @@
 - 其他連帶：LED／語音改由攝影機自己的設定處理（後台有「字幕機參數」）；平台以推送裡的 `is_whitelist` 記錄攝影機有沒有放行；要確認斷網續傳（補傳紀錄）的格式。
 - 設計文件與資料表要跟著改：access_events 的「開閘方式」改記攝影機判斷結果；cameras 要記白名單同步狀態。
 
+## 遠端架構雛形（2026-11-02 晚上開始，`remote/`）
+
+```
+管理網頁（任何地方）→ PS雲平台 remote/server.py ←（小主機主動往外連，HTTPS 長輪詢）← 現場小主機 remote/gateway.py →（內網）→ 攝影機
+```
+- **平台** `remote/server.py`：管理網頁（登入：密碼 PBKDF2 存在 `remote/server_config.json`，不進 git；`python server.py init` 設定密碼並產生小主機 token）、`/gw/poll` 給小主機長輪詢、`/api/cmd` 下指令並等結果（最多 45 秒）、稽核紀錄 `remote/data/audit_log.txt`。只綁 127.0.0.1:8600，對外用 cloudflared 通道。暫時跑在 RYW 筆電，之後搬 Google Cloud。
+- **小主機** `remote/gateway.py`：設定檔 `remote/gateway_config.json`（不進 git，範例 gateway_config.example.json：平台網址、gateway_id、token、攝影機代號→IP）。平台只能用攝影機代號，IP 只在小主機本機；指令只接受 wl_list／wl_add／wl_delete／restart_info／reboot／led_get／led_set／photo_query／photo_get，參數在小主機再檢查一次。重用 tools/ 的 hx_whitelist、hx_led、hx_camera、whitelist_app 的檢查函式。
+- **假攝影機** `tools/fake_camera.py`：在家開發用，資料來自 `tools/captures_camera_snapshot/`（只在 RYW 筆電，不進 git）。白名單 127.0.0.1:8117、網頁 8000、照片 8081。
+- 2026-11-02 在家本機實測通過：登入、白名單讀／新增／刪除、SD 照片查詢（55 張）與下載、重開機、錯誤路徑與別的攝影機代號都會被擋。**還沒接真攝影機**：下一步把 gateway 打包成 exe 放公司電腦（gateway_config 填 192.168.1.100），平台開 cloudflared 通道給它連。
+
 ## 大架構（RYW 2026-11-02 提出，部分待定）
 
 **系統名稱：PS雲平台**（RYW 2026-11-02 定名，原本暫稱「車道管理雲端系統」）。跟 JH 雲平台**分開**，不共用總控。概念跟 JH 雲平台一樣：
