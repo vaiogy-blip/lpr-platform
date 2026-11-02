@@ -25,16 +25,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import hx_camera  # noqa: E402
 import hx_led  # noqa: E402
+import hx_params  # noqa: E402
 from hx_whitelist import log_operation  # noqa: E402
 from whitelist_app import (BadRequest, add_item, check_date, check_plate, delete_item,  # noqa: E402
                            list_whitelist, reboot_camera, save_led)
 
-VERSION = "0.2"
+VERSION = "0.3"
 POLL_TIMEOUT = 40  # 平台最多讓長輪詢等 25 秒
 
 
 def load_config():
-    path = os.path.join(HERE, "gateway_config.json")
+    path = os.environ.get("GATEWAY_CONFIG") or os.path.join(HERE, "gateway_config.json")  # 模擬時可指定別的設定檔
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     if not cfg.get("token") or len(cfg["token"]) < 24:
@@ -82,6 +83,17 @@ def run_command(cfg, cmd):
         return {"led": hx_led.to_view(hx_led.read_raw(ip))}
     if kind == "led_set":
         return save_led(ip, args.get("led"))
+    if kind == "param_get":
+        return hx_params.read_all(ip)
+    if kind == "param_set":
+        key = str(args.get("key", ""))[:40]
+        try:
+            changes = hx_params.write(ip, key, args.get("values"))
+        except ValueError as e:
+            log_operation(ip, f"遠端改參數 {key}（失敗：{e}）", "-")
+            raise BadRequest(str(e))
+        log_operation(ip, f"遠端改參數 {key}（成功）{'；'.join(changes) or '沒有變更'}", "-")
+        return {"changes": changes, **hx_params.read_all(ip)}
     if kind == "photo_query":
         plate = args.get("plate", "")
         plate = check_plate(plate) if plate else ""

@@ -6,7 +6,9 @@
   HTTP 8000：/cgi-bin/get.cgi、set.cgi、queryLocalPic.cgi
   HTTP 8081：SD 卡照片（真攝影機是 80 埠；一律回 sample 照片）
 
-只綁 127.0.0.1。用法：python fake_camera.py
+只綁本機。用法：python fake_camera.py [--host 127.0.0.2]
+模擬多個場站時，每支假攝影機用不同的 127.0.0.x（Windows 的 127.x.x.x 都是本機）。
+set.cgi 改的參數會記在記憶體裡，get.cgi 會讀回改過的值（重開假攝影機就恢復原狀）。
 """
 
 import glob
@@ -14,15 +16,19 @@ import json
 import os
 import socketserver
 import struct
+import sys
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-HOST = "127.0.0.1"
+HOST = sys.argv[sys.argv.index("--host") + 1] if "--host" in sys.argv else "127.0.0.1"
+if not HOST.startswith("127."):
+    raise SystemExit("假攝影機只能開在 127.x.x.x")
 SDK_PORT, WEB_PORT, PHOTO_PORT = 8117, 8000, 8081
 SNAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures_camera_snapshot")
 
+settings = {}   # set.cgi 改過的參數：key → {欄位: 值}
 whitelist = {}  # 車牌 → [開始日期, 結束日期, 開始時間, 結束時間, 類型]
 lock = threading.Lock()
 
@@ -107,6 +113,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if url.path == "/cgi-bin/get.cgi":
             key = parse_qs(url.query).get("key", [""])[0]
             path = os.path.join(SNAP, f"get_{os.path.basename(key)}.json")
+            with lock:
+                if key in settings:
+                    return self.reply(json.dumps({key: settings[key]}, ensure_ascii=False).encode("utf-8"))
             body = open(path, "rb").read() if os.path.exists(path) else b"{}"
             return self.reply(body)
         if url.path.endswith(".jpg"):
@@ -122,7 +131,16 @@ class WebHandler(BaseHTTPRequestHandler):
             if form.get("key") == "camera_restart" and form.get("restart_manual") == "1":
                 log("收到重開機指令（假攝影機不會真的重開）")
             else:
-                log(f"收到設定 key={form.get('key')}（{len(form)} 個欄位）")
+                key = form.get("key", "")
+                path = os.path.join(SNAP, f"get_{os.path.basename(key)}.json")
+                if key != "led" and os.path.exists(path):
+                    with lock:
+                        cur = settings.get(key) or json.load(open(path, encoding="utf-8")).get(key, {})
+                        for k, v in form.items():
+                            if k in cur:
+                                cur[k] = int(v) if type(cur[k]) is int and v.lstrip("-").isdigit() else v
+                        settings[key] = cur
+                log(f"收到設定 key={key}（{len(form)} 個欄位）")
             return self.reply(b"0", "text/plain")
         if path == "/cgi-bin/queryLocalPic.cgi":
             data = json.load(open(os.path.join(SNAP, "queryLocalPic.json"), encoding="utf-8"))

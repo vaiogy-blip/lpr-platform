@@ -11,10 +11,10 @@
       "port": 8090
     },
     {
-      "name": "ps-platform",
+      "name": "psc",
       "runtimeExecutable": "python",
       "runtimeArgs": [
-        "remote/server.py"
+        "psc/server.py"
       ],
       "port": 8600,
       "autoPort": false

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PSC 雲平台</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<div id="login" class="login hidden">
+  <h1>PSC 雲平台</h1><p class="muted">請登入</p>
+  <div class="card">
+    <label for="lu">帳號</label><input id="lu" autocomplete="username">
+    <label for="lp" class="mt">密碼</label><input id="lp" type="password" autocomplete="current-password">
+    <div class="mt"><button id="lbtn">登入</button></div><div class="msg bad" id="lmsg"></div>
+  </div>
+</div>
+<div id="shell" class="shell hidden">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+<script src="/app.js"></script>
+</body></html>
