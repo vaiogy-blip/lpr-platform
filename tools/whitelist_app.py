@@ -21,6 +21,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import hx_camera
 import hx_led
 from hx_whitelist import CMD_ADD, CMD_DELETE, CMD_LIST, log_dir, log_operation, record, send
 
@@ -116,6 +117,18 @@ def save_led(ip, view):
     return {"led": hx_led.to_view(hx_led.read_raw(ip))}
 
 
+def reboot_camera(ip):
+    try:
+        hx_camera.reboot(ip)
+    except OSError:
+        log_operation(ip, "網頁重開機（連線失敗）", "-")
+        raise
+    except (ValueError, KeyError, TypeError) as e:
+        log_operation(ip, f"網頁重開機（失敗：{e}）", "-")
+        raise BadRequest(str(e) if isinstance(e, ValueError) else "攝影機回傳格式不對")
+    log_operation(ip, "網頁重開機（已送出）", "-")
+
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 10  # 慢速連線不要一直佔著
 
@@ -159,6 +172,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/led":
             ip = parse_qs(url.query).get("ip", [""])[0]
             self.run(lambda: {"led": hx_led.to_view(hx_led.read_raw(check_ip(ip)))})
+        elif url.path == "/api/restart":
+            ip = parse_qs(url.query).get("ip", [""])[0]
+            self.run(lambda: {"restart": hx_camera.read_restart(check_ip(ip))[0]})
         else:
             self.reply(404, "text/plain; charset=utf-8", b"not found")
 
@@ -185,6 +201,8 @@ class Handler(BaseHTTPRequestHandler):
             self.run(lambda: delete_item(check_ip(body.get("ip", "")), check_plate(body.get("plate", ""))))
         elif path == "/api/led":
             self.run(lambda: save_led(check_ip(body.get("ip", "")), body.get("led")))
+        elif path == "/api/reboot":
+            self.run(lambda: reboot_camera(check_ip(body.get("ip", ""))))
         else:
             self.reply_json(404, {"ok": False, "error": "not found"})
 
@@ -233,6 +251,8 @@ h2{font-size:18px;margin:24px 0 8px}h3{font-size:15px;margin:14px 0 6px}
 <div class="card"><table><thead><tr><th>車牌</th><th>有效期間</th><th>狀態</th><th></th></tr></thead><tbody id="list"><tr><td colspan="4" class="empty">讀取中…</td></tr></tbody></table></div>
 <h2>字幕機（入口）</h2>
 <div class="card" id="ledcard"><div class="empty">讀取中…</div></div>
+<h2>攝影機維護</h2>
+<div class="card"><div class="opt"><button class="ghost" id="reboot" style="color:var(--bad)">攝影機重開機</button><span class="ln" id="restartinfo"></span></div><div id="rbmsg"></div></div>
 </main><script>
 const $=id=>document.getElementById(id);
 const today=new Date(),pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
@@ -279,7 +299,14 @@ async function saveLed(){const v=JSON.parse(JSON.stringify(led)),q=s=>document.q
   q('.'+k+'_text').forEach(e=>v.lines[e.dataset.i][k+'_text']=e.value);q('.'+k+'_color').forEach(e=>v.lines[e.dataset.i][k+'_color']=+e.value)}
  $('ledsave').disabled=true;const d=await api('/api/led',{ip:$('ip').value.trim(),led:v});
  if(d.ok){led=d.led;renderLed();ledMsg('已存到攝影機，字幕機會馬上更新',true)}else{$('ledsave').disabled=false;ledMsg(d.error,false)}}
-$('reload').onclick=()=>{load();loadLed()};load();loadLed();
+async function loadRestart(){const d=await api('/api/restart?ip='+encodeURIComponent($('ip').value.trim()));
+ $('restartinfo').textContent=d.ok?(d.restart.auto?'自動重開：每 '+d.restart.every_days+' 天 '+d.restart.time:'自動重開：沒有開'):''}
+$('reboot').onclick=async()=>{const ip=$('ip').value.trim();
+ if(!confirm('確定要讓攝影機 '+ip+' 重開機嗎？\\n重開大約 1～2 分鐘，這段時間不會辨識、不會自動開閘。'))return;
+ $('reboot').disabled=true;const d=await api('/api/reboot',{ip});
+ $('rbmsg').textContent=d.ok?'已送出重開機，約 1～2 分鐘後按「重新讀取」確認恢復':d.error;$('rbmsg').className=d.ok?'okmsg':'err';
+ setTimeout(()=>$('reboot').disabled=false,60000)};
+$('reload').onclick=()=>{load();loadLed();loadRestart()};load();loadLed();loadRestart();
 </script></body></html>
 """
 
