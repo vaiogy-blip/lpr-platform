@@ -68,7 +68,11 @@ def candidate(n, plate, action):
         white_list = {"oper": "delete" if action == "delete" else "add", "count": 1, "list": [entry]}
         if n == 7:
             return {"error_num": 0, "error_str": "noerror", "white_list": white_list}
-        return {"Response_AlarmInfoPlate": {"info": "ok", "content": "", "is_pay": "true"}, "white_list": white_list}
+        # 跟 Gemini 給的範例一字不差（content、end_time 2099）
+        if action != "delete":
+            entry["end_time"] = "2099-12-31 23:59:59"
+            return {"Response_AlarmInfoPlate": {"info": "ok", "content": "歡迎", "is_pay": "true"}, "white_list": white_list}
+        return {"Response_AlarmInfoPlate": {"info": "ok"}, "white_list": white_list}
     return None
 
 
