@@ -48,6 +48,7 @@ async function start() {
 const PAGES = [
   ['dashboard', '總覽', () => can('site.view')],
   ['sites', '場站', () => can('site.view')],
+  ['events', '進出紀錄', () => can('event.view')],
   ['companies', '客戶公司', () => can('company.manage')],
   ['users', '帳號', () => can('user.manage')],
   ['roles', '權限群組', () => can('user.manage')],
@@ -67,7 +68,7 @@ function route() {
   const name = page === 'site' ? 'sites' : (PAGES.find(p => p[0] === page && p[2]()) ? page : 'dashboard');
   renderNav(name);
   main().innerHTML = '<p class="muted">讀取中…</p>';
-  const views = {dashboard: viewDashboard, sites: viewSites, companies: viewCompanies, users: viewUsers, roles: viewRoles, audit: viewAudit, account: viewAccount};
+  const views = {dashboard: viewDashboard, sites: viewSites, events: () => viewEvents(arg ? +arg : null), companies: viewCompanies, users: viewUsers, roles: viewRoles, audit: viewAudit, account: viewAccount};
   if (page === 'site' && arg) return viewSite(+arg);
   (views[name] || viewDashboard)();
 }
@@ -96,7 +97,9 @@ async function viewDashboard() {
     (me.is_root ? stat(c.companies, '公司') : '') + stat(c.sites, '場站') +
     stat(c.gateways_online + ' / ' + c.gateways, '小主機線上', c.gateways_online < c.gateways ? 'bad' : 'ok') +
     stat(c.cameras, '攝影機') + stat(c.sites_offline, '場站有斷線', c.sites_offline ? 'bad' : '') +
-    stat(c.sites_no_gateway, '場站還沒裝小主機', c.sites_no_gateway ? 'warn' : '') + '</div><h2>各場站狀態</h2>';
+    stat(c.sites_no_gateway, '場站還沒裝小主機', c.sites_no_gateway ? 'warn' : '') +
+    (c.today_events === null ? '' : stat(c.today_events, '今日進出') + stat(c.today_abnormal, '今日非白名單', c.today_abnormal ? 'warn' : '')) +
+    '</div><h2>各場站狀態</h2>';
   const groups = {};
   d.sites.forEach(s => (groups[s.company_name] = groups[s.company_name] || []).push(s));
   if (!d.sites.length) html += '<div class="card muted">還沒有場站。' + (can('site.manage') ? '到「場站」新增第一個。' : '') + '</div>';
@@ -112,7 +115,8 @@ function siteLine(s) {
   const cams = s.gateways.reduce((n, g) => n + g.cameras.length, 0);
   const last = s.gateways.map(g => esc(g.name) + ' ' + esc(g.last_seen)).join('、');
   return '<div class="site"><div><a href="#/site/' + s.id + '"><b>' + esc(s.name) + '</b></a> <span class="tag">' + esc(siteKinds[s.kind] || s.kind) + '</span>' +
-    '<div class="small muted">小主機 ' + on + '/' + s.gateways.length + ' 線上・攝影機 ' + cams + ' 支' + (last ? '・最後連線 ' + last : '') + '</div></div>' +
+    '<div class="small muted">小主機 ' + on + '/' + s.gateways.length + ' 線上・攝影機 ' + cams + ' 支' + (last ? '・最後連線 ' + last : '') +
+    (s.today ? '・<a href="#/events/' + s.id + '">今日進出 ' + s.today.n + ' 筆' + (s.today.abnormal ? '（非白名單 ' + s.today.abnormal + '）' : '') + '</a>' : '') + '</div></div>' +
     '<div>' + state + '</div></div>';
 }
 
@@ -149,7 +153,7 @@ async function viewSite(id) {
   let html = '<p><a href="#/sites">← 場站</a></p><h1>' + esc(s.name) + '</h1><p class="muted">' + esc(s.company_name) + '・' + esc(siteKinds[s.kind] || s.kind) + (s.address ? '・' + esc(s.address) : '') + '</p>';
   html += '<h2>現場小主機</h2><div class="card"><div class="scroll"><table><thead><tr><th>名稱</th><th>狀態</th><th>版本</th><th>最後連線</th><th>攝影機</th>' + (can('site.manage') ? '<th></th>' : '') + '</tr></thead><tbody>' +
     (s.gateways.map(g => '<tr><td>' + esc(g.name) + '<div class="small muted">' + esc(g.id) + '</div></td><td><span class="dot ' + (g.online ? 'on' : 'off') + '"></span>' + (g.online ? '線上' : '離線') + '</td><td>' + esc(g.version || '-') +
-      '</td><td>' + esc(g.last_seen) + '</td><td>' + (g.cameras.map(c => esc(c.name)).join('、') || '<span class="muted">還沒回報</span>') + '</td>' +
+      '</td><td>' + esc(g.last_seen) + '</td><td>' + (g.cameras.map(c => esc(c.name) + pushState(g, c)).join('<br>') || '<span class="muted">還沒回報</span>') + '</td>' +
       (can('site.manage') ? '<td><button class="ghost sm" data-reset="' + esc(g.id) + '">重發通行碼</button></td>' : '') + '</tr>').join('') ||
       '<tr><td colspan="6" class="muted">還沒有小主機</td></tr>') + '</tbody></table></div>';
   if (can('site.manage')) html += '<div class="row mt"><input id="gname" placeholder="新小主機名稱，例如 警衛室電腦" class="auto"><button id="gadd">新增小主機</button></div><div class="msg" id="gmsg"></div><div id="gcfg"></div>';
@@ -158,6 +162,7 @@ async function viewSite(id) {
     '<div><label for="ename">名稱</label><input id="ename" value="' + esc(s.name) + '"></div>' +
     '<div><label for="ekind">類型</label><select id="ekind">' + Object.entries(siteKinds).map(([k, v]) => '<option value="' + k + '"' + (k === s.kind ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>' +
     '<div><label for="eaddr">地址</label><input id="eaddr" value="' + esc(s.address) + '"></div><div><button id="esave">儲存</button></div></div><div class="msg" id="emsg"></div></details>';
+  if (can('event.view')) html += '<p><a href="#/events/' + s.id + '">→ 看這個場站的進出紀錄</a></p>';
   html += '<h2>攝影機</h2>';
   if (!cams.length) html += '<div class="card muted">小主機連上來並回報攝影機後，這裡就能管理。</div>';
   else html += '<div class="card"><div class="row"><label for="camsel">選擇攝影機</label><select id="camsel" class="auto">' +
@@ -187,6 +192,11 @@ async function viewSite(id) {
     const pick = () => renderCamera(cams[+$('camsel').value]);
     $('camsel').addEventListener('change', pick); pick();
   }
+}
+function pushState(g, c) {
+  if (g.online && g.camera_push === null) return ' <span class="small muted">（小主機 0.4 版起才看得到推送狀態）</span>';
+  if (!g.online || !(c.id in (g.camera_push || {}))) return ' <span class="small muted">（沒收到推送）</span>';
+  return g.camera_push[c.id] ? ' <span class="small ok">● 推送中</span>' : ' <span class="small bad">● 推送中斷</span>';
 }
 function showGatewayConfig(cfg, note) {
   const text = JSON.stringify(cfg, null, 2);
@@ -224,10 +234,15 @@ function tabWhitelist(pane) {
     '<div><label for="wend">結束（日期時間）</label><input id="wend" type="datetime-local" step="1" value="' + isoDate(ny) + 'T23:59:59"></div>' +
     '<div><button id="wadd">新增／更新</button></div></div>' +
     '<p class="small warn">⚠️ 白名單車會自動開閘。時間（時:分:秒）攝影機怎麼解讀還沒實機驗證，正式社區請先維持 00:00:00～23:59:59。</p>' : '') +
+    '<div class="row mt"><button class="ghost sm" id="wexport">匯出 Excel（CSV）</button>' +
+    (can('wl.edit') ? '<label class="ghost sm filebtn">批次匯入（CSV）<input type="file" id="wfile" accept=".csv,text/csv" class="hidden"></label>' +
+      '<span class="small muted">格式：車牌,開始,結束（例 ABC1234,2026/11/03,2027/11/02；可帶時間）</span>' : '') + '</div><div id="wimport"></div>' +
     '<div class="msg" id="wmsg"></div><div class="scroll"><table><thead><tr><th>車牌</th><th>有效期間</th><th>狀態</th><th></th></tr></thead><tbody id="wlist"><tr><td colspan="4" class="muted">讀取中…</td></tr></tbody></table></div>';
+  let lastItems = [];
   const load = async () => {
     const d = await cmd('wl_list');
     if (!$('wlist')) return;  // 等結果時已經切到別的分頁
+    if (d.ok) lastItems = d.data.items;
     if (!d.ok) return $('wlist').innerHTML = '<tr><td colspan="4" class="bad">' + esc(d.error) + '</td></tr>';
     const items = d.data.items;
     $('wlist').innerHTML = items.length ? items.map(i => '<tr><td><b>' + esc(i.plate) + '</b></td><td>' + esc(i.begin) + ' ～ ' + esc(i.end) + '</td><td class="' +
@@ -251,8 +266,65 @@ function tabWhitelist(pane) {
       load();
     });
     $('wplate').addEventListener('keydown', e => { if (e.key === 'Enter') $('wadd').click(); });
+    $('wfile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importCsv(f, load); });
   }
+  $('wexport').addEventListener('click', () => {
+    if (!lastItems.length) return say($('wmsg'), '白名單是空的，或還沒讀完');
+    const csv = '\ufeff車牌,開始,結束,狀態\r\n' + lastItems.map(i => [i.plate, i.begin, i.end, i.state].map(csvCell).join(',')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
+    a.download = '白名單_' + cur.cam.name + '_' + isoDate(new Date()) + '.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
   load();
+}
+
+const csvCell = v => {
+  let t = String(v);
+  if (/^[=+\-@]/.test(t)) t = "'" + t;  // 防止 Excel 把內容當公式執行
+  return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+};
+// 「2026/11/03」「2026-11-03 08:00」「2026/11/03 08:00:00」都轉成平台要的 2026-11-03T08:00:00；只給日期就原樣（開始 00:00:00、結束 23:59:59）
+function normTime(t) {
+  const m = String(t || '').trim().match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!m) return null;
+  const d = m[1] + '-' + pad(+m[2]) + '-' + pad(+m[3]);
+  return m[4] === undefined ? d : d + 'T' + pad(+m[4]) + ':' + m[5] + ':' + (m[6] || '00');
+}
+async function importCsv(file, reload) {
+  const box = $('wimport');
+  const text = await file.text();
+  const rows = [], bad = [];
+  text.replace(/^\ufeff/, '').split(/\r?\n/).forEach((line, i) => {
+    const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+    if (!cols[0]) return;
+    const plate = cols[0].replace(/[- ]/g, '').toUpperCase();
+    if (!/^[A-Z0-9]{2,10}$/.test(plate)) { if (i > 0) bad.push('第' + (i + 1) + '行 ' + cols[0]); return; }  // 第一行通常是標題
+    const begin = normTime(cols[1]), end = normTime(cols[2]);
+    if (!begin || !end) { bad.push('第' + (i + 1) + '行 ' + plate + '（日期看不懂）'); return; }
+    rows.push({plate, begin, end});
+  });
+  if (!rows.length) { box.innerHTML = '<p class="bad">檔案裡找不到可以匯入的車牌。' + esc(bad.slice(0, 5).join('、')) + '</p>'; return; }
+  box.innerHTML = '<div class="notice"><b>要匯入 ' + rows.length + ' 筆到「' + esc(cur.cam.name) + '」</b>' +
+    (bad.length ? '<p class="small warn">有 ' + bad.length + ' 行看不懂，會跳過：' + esc(bad.slice(0, 10).join('、')) + (bad.length > 10 ? '…' : '') + '</p>' : '') +
+    '<p class="small">已經在白名單裡的車牌會更新有效期間。⚠️ 匯入後這些車會自動開閘。</p>' +
+    '<div class="row"><button id="wimpgo">確定匯入</button><button class="ghost" id="wimpno">取消</button></div><div class="msg" id="wimpmsg"></div></div>';
+  $('wimpno').addEventListener('click', () => box.innerHTML = '');
+  $('wimpgo').addEventListener('click', async () => {
+    busy($('wimpgo'), true); $('wimpno').disabled = true;
+    const fails = [];
+    let done = 0;
+    for (let i = 0; i < rows.length; i += 50) {  // 一次 50 筆，確保在 45 秒內做完
+      if (!$('wimpmsg')) return;
+      say($('wimpmsg'), '匯入中… ' + done + ' / ' + rows.length, true);
+      const d = await cmd('wl_batch', {items: rows.slice(i, i + 50)});
+      if (!d.ok) { fails.push('第 ' + (i + 1) + '～' + Math.min(i + 50, rows.length) + ' 筆：' + d.error); continue; }
+      d.data.report.forEach(r => { if (r.ok) done++; else fails.push(r.plate + '：' + r.error); });
+    }
+    if (!$('wimport')) return;
+    $('wimport').innerHTML = '<div class="notice"><b>匯入完成：成功 ' + done + ' 筆' + (fails.length ? '，失敗 ' + fails.length + ' 筆' : '') + '</b>' +
+      (fails.length ? '<p class="small bad">' + esc(fails.slice(0, 20).join('；')) + '</p>' : '') + '</div>';
+    reload();
+  });
 }
 
 // 照片
@@ -383,6 +455,43 @@ function tabMaint(pane) {
     say($('rmsg'), d.ok ? '已送出重開機，約 20 秒後恢復' : d.error, d.ok);
     setTimeout(() => $('reboot') && busy($('reboot'), false), 60000);
   });
+}
+
+// ---------- 進出紀錄 ----------
+async function viewEvents(siteId) {
+  const sd = await api('sites');
+  if (!sd.ok) return main().innerHTML = '<p class="bad">' + esc(sd.error) + '</p>';
+  main().innerHTML = '<h1>進出紀錄</h1><div class="card"><div class="form">' +
+    '<div><label for="esite">場站</label><select id="esite"><option value="">全部場站</option>' +
+    sd.sites.map(x => '<option value="' + x.id + '"' + (x.id === siteId ? ' selected' : '') + '>' + esc(x.name) + (me.is_root ? '（' + esc(x.company_name) + '）' : '') + '</option>').join('') + '</select></div>' +
+    '<div><label for="edate">日期</label><input id="edate" type="date" value="' + isoDate(new Date()) + '"></div>' +
+    '<div><label for="eplate">車牌（可只打一部分）</label><input id="eplate" autocomplete="off"></div>' +
+    '<div class="radio"><label><input type="checkbox" id="eabn">只看非白名單</label></div><div><button id="eq">查詢</button></div></div>' +
+    '<p class="small muted">白名單車不存照片；非白名單車才存照片。查詢與看照片都會留紀錄。</p></div>' +
+    '<div class="msg" id="emsg"></div><div class="card scroll"><table><thead><tr><th>時間</th><th>場站／攝影機</th><th>車牌</th><th>進出</th><th>白名單</th><th></th></tr></thead><tbody id="elist"></tbody></table></div>' +
+    '<img id="eimg" class="photo-big hidden" alt="進出照片">';
+  const load = async () => {
+    busy($('eq'), true);
+    const d = await api('events', {site_id: $('esite').value ? +$('esite').value : null, date: $('edate').value, plate: $('eplate').value.trim(), abnormal_only: $('eabn').checked});
+    if (!$('elist')) return;
+    busy($('eq'), false);
+    if (!d.ok) return say($('emsg'), d.error);
+    say($('emsg'), d.date + ' 共 ' + d.rows.length + ' 筆' + (d.rows.length >= 500 ? '（只列最新 500 筆，請縮小範圍）' : ''), true);
+    $('elist').innerHTML = d.rows.map(r => '<tr><td>' + esc(r.ts.slice(11)) + '</td><td>' + esc(r.site_name) + '<div class="small muted">' + esc(r.camera_name) + '</div></td><td><b>' + esc(r.plate) + '</b></td><td>' +
+      (r.direction === 'out' ? '出' : '進') + '</td><td class="' + (r.is_whitelist ? 'ok' : 'warn') + '">' + (r.is_whitelist ? '是' : '否') + '</td><td>' +
+      (r.has_photo && can('photo.view') ? '<button class="ghost sm" data-eid="' + r.id + '">照片</button>' : '') + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">這一天沒有紀錄</td></tr>';
+  };
+  $('eq').addEventListener('click', load);
+  $('elist').addEventListener('click', async e => {
+    const id = e.target.dataset.eid; if (!id) return;
+    e.target.disabled = true;
+    const d = await api('event_photo', {id: +id});
+    if (!$('eimg')) return;
+    e.target.disabled = false;
+    if (!d.ok) return say($('emsg'), d.error);
+    $('eimg').src = 'data:image/jpeg;base64,' + d.jpeg_b64; $('eimg').classList.remove('hidden'); $('eimg').scrollIntoView({behavior: 'smooth'});
+  });
+  load();
 }
 
 // ---------- 客戶公司 ----------

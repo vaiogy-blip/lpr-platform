@@ -9,10 +9,16 @@
 只綁本機。用法：python fake_camera.py [--host 127.0.0.2]
 模擬多個場站時，每支假攝影機用不同的 127.0.0.x（Windows 的 127.x.x.x 都是本機）。
 set.cgi 改的參數會記在記憶體裡，get.cgi 會讀回改過的值（重開假攝影機就恢復原狀）。
+加 --push http://127.0.0.1:8080/api/lpr/notify 會像真攝影機一樣推送：每 10 秒心跳，每 PUSH_EVERY 秒認到一台車
+（格式照 協議實測紀錄.md；從自己的 127.x 位址送出，小主機才認得是哪支攝影機）。
 """
 
+import base64
 import glob
+import http.client
 import json
+import random
+import time
 import os
 import socketserver
 import struct
@@ -20,7 +26,7 @@ import sys
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 HOST = sys.argv[sys.argv.index("--host") + 1] if "--host" in sys.argv else "127.0.0.1"
 if not HOST.startswith("127."):
@@ -28,6 +34,9 @@ if not HOST.startswith("127."):
 SDK_PORT, WEB_PORT, PHOTO_PORT = 8117, 8000, 8081
 SNAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures_camera_snapshot")
 
+PUSH_URL = sys.argv[sys.argv.index("--push") + 1] if "--push" in sys.argv else ""
+PUSH_EVERY = 20
+PLATES = ["AVM2066", "S30438", "ABC1234", "XYZ5678", "TST0001"]
 settings = {}   # set.cgi 改過的參數：key → {欄位: 值}
 whitelist = {}  # 車牌 → [開始日期, 結束日期, 開始時間, 結束時間, 類型]
 lock = threading.Lock()
@@ -156,6 +165,36 @@ class WebHandler(BaseHTTPRequestHandler):
         pass
 
 
+def push_loop():
+    """模擬攝影機的 HTTP POST 推送（只送，不管回什麼）。"""
+    url = urlparse(PUSH_URL)
+    samples = sorted(glob.glob(os.path.join(SNAP, "sample_*.jpg")))
+    pic = base64.b64encode(open(samples[0], "rb").read()).decode() if samples else ""
+    pic = pic.replace("+", "-").replace("/", "_").replace("=", ".")  # 跟真攝影機一樣的編法
+    common = {"mode": "5", "proto_ver": "1.12", "park_id": "0", "cam_id": "fake" + HOST.replace(".", ""), "cam_ip": HOST}
+    last_car = 0
+    while True:
+        forms = [{"type": "heartbeat", "interval": "10", "cur_status": "online", **common}]
+        if time.time() - last_car >= PUSH_EVERY:
+            last_car = time.time()
+            plate = random.choice(PLATES)
+            with lock:
+                white = plate in whitelist
+            forms.append({"type": "online", "plate_num": plate, "plate_type": "0", "plate_val": "true", "confidence": str(random.randint(18, 30)),
+                          "plate_color": "white", "start_time": str(int(time.time())), "vdc_type": "in", "is_whitelist": "true" if white else "false",
+                          "triger_type": "video", "picture": pic, "closeup_pic": "", **common})
+            log(f"推送：認到 {plate}（{'白名單' if white else '非白名單'}）")
+        for form in forms:
+            try:
+                conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=10, source_address=(HOST, 0))
+                conn.request("POST", url.path or "/", body=urlencode(form), headers={"Content-Type": "application/x-www-form-urlencoded"})
+                conn.getresponse().read()
+                conn.close()
+            except OSError:
+                pass
+        time.sleep(10)
+
+
 def main():
     load_whitelist()
     socketserver.ThreadingTCPServer.allow_reuse_address = True
@@ -164,6 +203,8 @@ def main():
                ThreadingHTTPServer((HOST, PHOTO_PORT), WebHandler)]
     for s in servers:
         threading.Thread(target=s.serve_forever, daemon=True).start()
+    if PUSH_URL:
+        threading.Thread(target=push_loop, daemon=True).start()
     log(f"啟動：白名單 {HOST}:{SDK_PORT}、網頁 {WEB_PORT}、照片 {PHOTO_PORT}，白名單 {len(whitelist)} 筆。按 Ctrl+C 結束。")
     try:
         threading.Event().wait()

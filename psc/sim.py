@@ -4,7 +4,8 @@
 並在設定檔裡的攝影機 IP（必須是 127.x.x.x）開假攝影機。按 Ctrl+C 全部關掉。
 
 設定檔怎麼來：在 PSC 網頁「場站」→ 新增小主機 → 下載設定檔，存到 psc/data/sim/，
-把 cameras 的 ip 改成 127.0.0.2、127.0.0.3…（每支不同），photo_port 改成 8081。
+把 cameras 的 ip 改成 127.0.0.2、127.0.0.3…（每支不同），photo_port 改成 8081，
+並加 "push_host": "127.0.0.1"、"push_port": 18081（每台小主機不同）；假攝影機會推送辨識結果到那裡。
 用法：python psc/sim.py
 """
 
@@ -33,11 +34,14 @@ def main():
             if not ip.startswith("127.") or ip in hosts:
                 continue
             hosts.add(ip)
-            procs.append(subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "fake_camera.py"), "--host", ip], env=env))
+            args = [sys.executable, os.path.join(ROOT, "tools", "fake_camera.py"), "--host", ip]
+            if cfg.get("push_port"):
+                args += ["--push", f"http://{cfg.get('push_host', '127.0.0.1')}:{cfg['push_port']}/api/lpr/notify"]
+            procs.append(subprocess.Popen(args, env=env))
     time.sleep(1)
     for path in configs:
         procs.append(subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "remote", "gateway.py")],
-                                      env={**env, "GATEWAY_CONFIG": path}))
+                                      env={**env, "GATEWAY_CONFIG": path, "GATEWAY_ALLOW_MULTI": "1"}))
     print(f"模擬中：假攝影機 {len(hosts)} 支、小主機 {len(configs)} 台。按 Ctrl+C 結束。")
     try:
         while True:

@@ -16,3 +16,4 @@ remote/gateway_config.json
 remote/data/
 remote/*.log
 psc/data/
+gateway_log.txt*

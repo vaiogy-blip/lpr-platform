@@ -12,6 +12,8 @@ PSC 雲平台：主控／客戶公司／場站三層的管理網頁＋現場小�
 啟動：python psc/server.py
 """
 
+import base64
+import binascii
 import getpass
 import hashlib
 import hmac
@@ -22,7 +24,7 @@ import secrets
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -40,19 +42,24 @@ CMD_WAIT = 45           # 網頁等指令結果最多幾秒
 ONLINE_WITHIN = 60      # 幾秒內有連線就算上線
 SESSION_HOURS = 12
 MAX_GW_BODY = 4_000_000
+MAX_EVENTS_BODY = 12_000_000   # 一次最多 20 筆，每筆照片約 60KB（Base64 後約 80KB）
+MAX_EVENT_PHOTO = 400_000
+# 進出紀錄與照片保留天數（個資，不能無限累積）。使用者還沒定案，先預設 90 天，可用環境變數 PSC_EVENT_DAYS 改
+EVENT_DAYS = int(os.environ.get("PSC_EVENT_DAYS") or 90)
+EVENT_PLATE_RE = re.compile(r"^([A-Z0-9]{2,12}|無法辨識)$")
 MAX_BODY = 32_000
 MAX_QUEUE = 20
 MIN_PASSWORD = 10
 
 # 每個小主機指令需要的權限；NO_AUDIT 是只讀、成功不記（失敗一樣記）
 CMD_PERM = {
-    "wl_list": "wl.view", "wl_add": "wl.edit", "wl_delete": "wl.edit",
+    "wl_list": "wl.view", "wl_add": "wl.edit", "wl_delete": "wl.edit", "wl_batch": "wl.edit",
     "photo_query": "photo.view", "photo_get": "photo.view",
     "param_get": "param.view", "led_get": "param.view", "restart_info": "param.view",
     "param_set": "param.edit", "led_set": "led.edit", "reboot": "camera.reboot",
 }
 NO_AUDIT = {"restart_info", "led_get", "param_get"}  # 讀白名單也要記：車牌是個資
-CMD_LABEL = {"wl_add": "新增白名單", "wl_delete": "刪除白名單", "photo_query": "查照片", "photo_get": "看照片",
+CMD_LABEL = {"wl_batch": "批次匯入白名單", "wl_add": "新增白名單", "wl_delete": "刪除白名單", "photo_query": "查照片", "photo_get": "看照片",
              "param_set": "改攝影機參數", "led_set": "改字幕機", "reboot": "重開攝影機", "wl_list": "讀白名單",
              "param_get": "讀參數", "led_get": "讀字幕機", "restart_info": "讀重開機排程"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,32}$")
@@ -100,6 +107,7 @@ def temp_password():
 class Gateway:
     def __init__(self, gid):
         self.id, self.last_seen, self.version = gid, 0, ""
+        self.camera_status = {}     # 攝影機代號 → 小主機回報時距離上次心跳幾秒
         self.queue, self.cond = [], threading.Condition()
 
 
@@ -116,8 +124,12 @@ def get_live(gid):
 def gateway_status(gid):
     gw = live.get(gid)
     seen = gw.last_seen if gw else 0
-    return {"online": time.time() - seen < ONLINE_WITHIN, "version": gw.version if gw else "",
-            "last_seen": datetime.fromtimestamp(seen).strftime("%m-%d %H:%M:%S") if seen else "從未連線"}
+    online = time.time() - seen < ONLINE_WITHIN
+    return {"online": online, "version": gw.version if gw else "",
+            "last_seen": datetime.fromtimestamp(seen).strftime("%m-%d %H:%M:%S") if seen else "從未連線",
+            # 攝影機有沒有在推送（心跳 10 秒一次；超過 60 秒沒收到就當沒在推）；None＝小主機太舊或沒設推送
+            "camera_push": None if gw and gw.camera_status is None else
+            ({k: v < ONLINE_WITHIN for k, v in gw.camera_status.items()} if gw and online else {})}
 
 
 def send_command(gid, camera, kind, args):
@@ -267,9 +279,23 @@ def site_rows(user):
     return out
 
 
+def today_counts(site_ids):
+    """各場站今天的進出數與非白名單數。"""
+    if not site_ids:
+        return {}
+    marks = ",".join("?" * len(site_ids))
+    rows = db.q(f"""SELECT site_id, COUNT(*) AS n, SUM(CASE WHEN is_whitelist=0 THEN 1 ELSE 0 END) AS abnormal
+                    FROM events WHERE site_id IN ({marks}) AND ts >= ? GROUP BY site_id""",
+                (*site_ids, datetime.now().strftime("%Y-%m-%d 00:00:00")))
+    return {r["site_id"]: {"n": r["n"], "abnormal": r["abnormal"] or 0} for r in rows}
+
+
 def api_dashboard(h, user, body):
     need(user, "site.view")
     sites = site_rows(user)
+    today = today_counts([s["id"] for s in sites]) if "event.view" in user["perms"] else {}
+    for s in sites:
+        s["today"] = today.get(s["id"], {"n": 0, "abnormal": 0}) if "event.view" in user["perms"] else None
     gws = [g for s in sites for g in s["gateways"]]
     companies = {s["company_id"] for s in sites}
     if user["is_root"] and user["site_ids"] is None:
@@ -278,7 +304,9 @@ def api_dashboard(h, user, body):
                        "gateways_online": sum(g["online"] for g in gws),
                        "cameras": sum(len(g["cameras"]) for g in gws),
                        "sites_offline": sum(1 for s in sites if s["gateways"] and not s["online"]),
-                       "sites_no_gateway": sum(1 for s in sites if not s["gateways"])},
+                       "sites_no_gateway": sum(1 for s in sites if not s["gateways"]),
+                       "today_events": sum(t["n"] for t in today.values()) if "event.view" in user["perms"] else None,
+                       "today_abnormal": sum(t["abnormal"] for t in today.values()) if "event.view" in user["perms"] else None},
             "sites": sites}
 
 
@@ -358,17 +386,79 @@ def api_cmd(h, user, body):
         raise Fail("這台小主機沒有這支攝影機")
     if not gateway_status(g["id"])["online"]:
         raise Fail("現場小主機目前離線（最近一分鐘沒有連線），請確認那台電腦和程式有開", 200)
+    if kind == "wl_batch":  # 先記下要匯入哪些車牌：就算之後逾時，稽核也查得到
+        items = args.get("items") if isinstance(args.get("items"), list) else []
+        db.audit(user, h.client_ip(), "批次匯入白名單（送出）", f"{site['name']} / {g['name']} / {camera}",
+                 json.dumps({"筆數": len(items), "車牌": [str(i.get("plate"))[:16] for i in items[:200] if isinstance(i, dict)]}, ensure_ascii=False),
+                 "送出", company_id=site["company_id"], site_id=site["id"])
     result = send_command(g["id"], camera, kind, args)
     if kind not in NO_AUDIT or not result.get("ok"):
         shown = {k: v for k, v in args.items() if k != "led"}  # 字幕機整包太長，改了什麼小主機會記
         if kind == "param_set" and result.get("ok"):
             shown = {"變更": (result.get("data") or {}).get("changes") or "沒有變更"}
+        if kind == "wl_batch":
+            rep = (result.get("data") or {}).get("report") or []
+            ok_plates = [r.get("plate") for r in rep if isinstance(r, dict) and r.get("ok")]
+            shown = {"筆數": len(args.get("items") or []), "成功": len(ok_plates), "車牌": ok_plates[:200]}
         db.audit(user, h.client_ip(), CMD_LABEL.get(kind, kind), f"{site['name']} / {g['name']} / {camera}",
                  json.dumps(shown, ensure_ascii=False), "成功" if result.get("ok") else result.get("error"),
                  company_id=site["company_id"], site_id=site["id"])
     if not result.get("ok"):
         raise Fail(result.get("error") or "失敗", 200)
     return {"data": result.get("data") or {}}
+
+
+def api_events(h, user, body):
+    need(user, "event.view")
+    sites = {s["id"]: s for s in visible_sites(user)}
+    site_id = body.get("site_id")
+    if site_id is not None:
+        if type(site_id) is not int or site_id not in sites:
+            raise Fail("找不到這個場站，或你沒有權限", 404)
+        ids = [site_id]
+    else:
+        ids = list(sites)
+    date = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+    try:
+        date = datetime.strptime(str(date), "%Y-%m-%d").strftime("%Y-%m-%d")  # 2026-1-3 也轉成 2026-01-03
+    except ValueError:
+        raise Fail("日期格式不對")
+    plate = body.get("plate") or ""
+    if not isinstance(plate, str) or len(plate) > 12:
+        raise Fail("車牌格式不對")
+    plate = re.sub(r"[^A-Z0-9]", "", plate.upper())  # 只留英數：% _ 不會被當萬用字元
+    if not ids:
+        return {"rows": []}
+    marks = ",".join("?" * len(ids))
+    sql = f"""SELECT e.id, e.ts, e.site_id, e.camera_name, e.plate, e.direction, e.is_whitelist, e.confidence,
+              e.photo IS NOT NULL AS has_photo FROM events e WHERE e.site_id IN ({marks}) AND e.ts >= ? AND e.ts <= ?"""
+    args = [*ids, f"{date} 00:00:00", f"{date} 23:59:59"]
+    if plate:
+        sql += " AND e.plate LIKE ?"
+        args.append(f"%{plate}%")
+    if body.get("abnormal_only") is True:
+        sql += " AND e.is_whitelist = 0"
+    rows = db.q(sql + " ORDER BY e.ts DESC, e.id DESC LIMIT 500", args)
+    for r in rows:
+        r["site_name"] = sites[r["site_id"]]["name"]
+    # 進出紀錄是個資：誰查了哪一天、哪個場站要留紀錄
+    target = sites[site_id]["name"] if site_id is not None else "全部場站"
+    db.audit(user, h.client_ip(), "查進出紀錄", target, f"{date} {plate}".strip(), f"{len(rows)} 筆",
+             company_id=sites[site_id]["company_id"] if site_id is not None else None, site_id=site_id)
+    return {"rows": rows, "date": date}
+
+
+def api_event_photo(h, user, body):
+    need(user, "event.view")
+    need(user, "photo.view")
+    e = db.one("SELECT id, site_id, plate, ts, photo FROM events WHERE id=?", (int_id(body, "id"),))
+    if not e:
+        raise Fail("找不到這筆紀錄", 404)
+    site = site_for(user, e["site_id"])
+    if not e["photo"]:
+        raise Fail("這筆紀錄沒有照片（白名單車不存照片）")
+    db.audit(user, h.client_ip(), "看進出照片", site["name"], f"{e['ts']} {e['plate']}", company_id=site["company_id"], site_id=site["id"])
+    return {"jpeg_b64": base64.b64encode(e["photo"]).decode("ascii")}
 
 
 def api_companies(h, user, body):
@@ -596,6 +686,7 @@ API = {
     "companies": api_companies, "company_add": api_company_add, "company_active": api_company_active,
     "roles": api_roles, "role_save": api_role_save, "role_delete": api_role_delete,
     "users": api_users, "user_save": api_user_save, "user_reset_password": api_user_reset_password, "audit": api_audit,
+    "events": api_events, "event_photo": api_event_photo,
 }
 ALLOWED_BEFORE_PW_CHANGE = {"me", "change_password"}
 
@@ -652,9 +743,15 @@ def login(h, body):
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 60
+    # HTTP/1.1（連線可重複使用）：實測 HTTP/1.0 每次回應後關連線，在這台 Windows 上大一點的回應（照片）偶爾會被截斷
+    protocol_version = "HTTP/1.1"
     session_hash = ""
 
+    body_read = False
+
     def send_body(self, code, ctype, body, extra=None):
+        if not self.body_read and (self.headers.get("Content-Length") not in (None, "", "0") or self.headers.get("Transfer-Encoding")):
+            self.close_connection = True  # 沒讀內容就回應（例如被擋）：這條連線不能再用，不然剩下的內容會被當成下一個請求
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -667,16 +764,27 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except OSError as e:
+            print(time.strftime("%H:%M:%S"), f"回應送到一半失敗（{len(body)} bytes）：{e!r}", file=sys.stderr, flush=True)
+            raise
 
     def json(self, code, obj, extra=None):
         self.send_body(code, "application/json; charset=utf-8", json.dumps(obj, ensure_ascii=False).encode("utf-8"), extra)
 
     def read_json(self, limit):
-        length = int(self.headers.get("Content-Length") or 0)
+        if self.headers.get("Transfer-Encoding"):  # 只接受 Content-Length，避免連線重複使用時內容被誤判（request smuggling）
+            raise ValueError
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError
         if not 0 <= length <= limit or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             raise ValueError
-        body = json.loads(self.rfile.read(length) or b"{}")
+        raw = self.rfile.read(length)
+        self.body_read = True
+        body = json.loads(raw or b"{}")
         if not isinstance(body, dict):
             raise ValueError
         try:
@@ -719,6 +827,7 @@ class Handler(BaseHTTPRequestHandler):
         return load_user(row["user_id"])
 
     def do_GET(self):
+        self.body_read = False  # 同一條連線會處理好幾個請求，每次重算
         if not self.host_ok():
             return self.send_body(403, "text/plain", b"forbidden")
         path = urlparse(self.path).path
@@ -729,11 +838,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_body(404, "text/plain", b"not found")
 
     def do_POST(self):
+        self.body_read = False  # 同一條連線會處理好幾個請求，每次重算
         if not self.host_ok():
             return self.json(403, {"ok": False, "error": "forbidden"})
         path = urlparse(self.path).path
         if path == "/gw/poll":
             return self.gateway_poll()
+        if path == "/gw/events":
+            return self.gateway_events()
         if not self.same_origin() or not path.startswith("/api/"):
             return self.json(403, {"ok": False, "error": "forbidden"})
         try:
@@ -769,25 +881,74 @@ class Handler(BaseHTTPRequestHandler):
             print(time.strftime("%H:%M:%S"), f"/api/{name} 發生錯誤：{type(e).__name__}: {e}", file=sys.stderr)
             return self.json(500, {"ok": False, "error": "平台處理時發生錯誤，請稍後再試"})
 
-    def gateway_poll(self):
-        # 先用通行碼找到小主機再讀內容：沒有正確通行碼的人不能丟大封包耗資源（資料庫只存雜湊，用雜湊查）
+    def gateway_auth(self, limit):
+        """先用通行碼找到小主機再讀內容：沒有正確通行碼的人不能丟大封包耗資源（資料庫只存雜湊，用雜湊查）。
+        成功回 (row, body)，失敗已回應並回 (None, None)。"""
         token = self.headers.get("Authorization", "").removeprefix("Bearer ")
-        row = db.one("""SELECT g.id, g.cameras, c.active FROM gateways g JOIN sites s ON s.id=g.site_id
+        row = db.one("""SELECT g.id, g.site_id, g.cameras, c.active FROM gateways g JOIN sites s ON s.id=g.site_id
                         JOIN companies c ON c.id=s.company_id WHERE g.token_hash=?""", (token_hash(token),)) if len(token) >= 24 else None
         if not row or not row["active"]:
             if row is None:
                 db.audit(None, self.client_ip(), "小主機連線被拒", result="通行碼不對")
             time.sleep(1)
-            return self.json(401, {"error": "unauthorized"})
+            self.json(401, {"error": "unauthorized"})
+            return None, None
         try:
-            body = self.read_json(MAX_GW_BODY)
+            body = self.read_json(limit)
         except ValueError:
-            return self.json(400, {"error": "bad request"})
-        gid = body.get("gateway_id")
-        if gid != row["id"]:
-            return self.json(401, {"error": "unauthorized"})
+            self.json(400, {"error": "bad request"})
+            return None, None
+        if body.get("gateway_id") != row["id"]:
+            self.json(401, {"error": "unauthorized"})
+            return None, None
+        return row, body
+
+    def gateway_events(self):
+        """小主機送來攝影機認到的車牌；照片只有非白名單車才有。"""
+        row, body = self.gateway_auth(MAX_EVENTS_BODY)
+        if not row:
+            return
+        names = {c["id"]: c["name"] for c in json.loads(row["cameras"])}
+        events = body.get("events")
+        saved = 0
+        for e in (events if isinstance(events, list) else [])[:50]:
+            if not isinstance(e, dict) or e.get("camera") not in names:
+                continue
+            plate, ts = e.get("plate"), e.get("time")
+            if not isinstance(plate, str) or not EVENT_PLATE_RE.match(plate) or not isinstance(ts, str):
+                continue
+            try:
+                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            photo = None
+            if isinstance(e.get("photo_b64"), str) and e.get("is_whitelist") is not True:
+                try:
+                    photo = base64.b64decode(e["photo_b64"], validate=True)
+                except (binascii.Error, ValueError):
+                    photo = None
+                if photo and (not photo.startswith(b"\xff\xd8") or len(photo) > MAX_EVENT_PHOTO):
+                    photo = None
+            conf = e.get("confidence")
+            db.run("""INSERT OR IGNORE INTO events(ts, received, site_id, gateway_id, camera_id, camera_name, plate, direction, is_whitelist, confidence, photo)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                   (ts, db.now(), row["site_id"], row["id"], e["camera"], names[e["camera"]], plate,
+                    "out" if e.get("direction") == "out" else "in", 1 if e.get("is_whitelist") is True else 0,
+                    conf if type(conf) is int and 0 <= conf <= 1000 else None, photo))
+            saved += 1
+        get_live(row["id"]).last_seen = time.time()
+        self.json(200, {"saved": saved})
+
+    def gateway_poll(self):
+        row, body = self.gateway_auth(MAX_GW_BODY)
+        if not row:
+            return
+        gid = row["id"]
         gw = get_live(gid)
         gw.last_seen, gw.version = time.time(), str(body.get("version", ""))[:20]
+        status = body.get("camera_status")
+        # 0.4 以前的小主機不回報推送狀態：記成 None，畫面才不會誤以為攝影機沒在推
+        gw.camera_status = {str(k)[:40]: v for k, v in status.items() if type(v) is int} if isinstance(status, dict) else None
         cams = body.get("cameras")
         if isinstance(cams, list):
             cams = [{"id": c["id"][:40], "name": str(c.get("name") or c["id"])[:40]}
@@ -809,6 +970,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def log_error(self, fmt, *args):  # 連線逾時、送資料失敗等，印出來方便查
+        print(time.strftime("%H:%M:%S"), "連線錯誤：", fmt % args, file=sys.stderr, flush=True)
 
 
 # ---------- 初始化 ----------
@@ -843,13 +1007,25 @@ def init():
         print("已沿用舊的 company 小主機通行碼（場站：公司測試場站），公司那台小主機不用重設。")
 
 
+def purge_loop():
+    """每天清一次超過保留天數的進出紀錄（含照片）。"""
+    while True:
+        cutoff = (datetime.now() - timedelta(days=EVENT_DAYS)).strftime("%Y-%m-%d 00:00:00")
+        n = db.one("SELECT COUNT(*) AS n FROM events WHERE ts < ?", (cutoff,))["n"]
+        if n:
+            db.run("DELETE FROM events WHERE ts < ?", (cutoff,))
+            db.audit(None, "-", "清除過期進出紀錄", f"{EVENT_DAYS} 天前", f"{n} 筆", company_id=None)
+        time.sleep(24 * 3600)
+
+
 def main():
     if sys.argv[1:] == ["init"]:
         return init()
     sys.stdout.reconfigure(errors="replace")
     if not db.one("SELECT id FROM companies WHERE is_root=1"):
         raise SystemExit("還沒初始化：先執行 python psc/server.py init")
-    print(f"PSC 雲平台啟動：http://127.0.0.1:{PORT}　按 Ctrl+C 結束。")
+    threading.Thread(target=purge_loop, daemon=True).start()
+    print(f"PSC 雲平台啟動：http://127.0.0.1:{PORT}　進出紀錄保留 {EVENT_DAYS} 天。按 Ctrl+C 結束。")
     try:
         ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
     except KeyboardInterrupt:

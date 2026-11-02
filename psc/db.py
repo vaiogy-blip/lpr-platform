@@ -22,7 +22,8 @@ PERMS = [
     ("site.view", "看場站", "看場站、小主機、攝影機的上線狀態"),
     ("wl.view", "看白名單", "讀取白名單"),
     ("wl.edit", "改白名單", "新增、刪除白名單（白名單車會自動開閘）"),
-    ("photo.view", "看照片", "查詢、查看 SD 卡照片（個資，會留紀錄）"),
+    ("photo.view", "看照片", "查詢、查看 SD 卡照片與進出紀錄的照片（個資，會留紀錄）"),
+    ("event.view", "看進出紀錄", "查看車輛進出紀錄（個資，會留紀錄）"),
     ("param.view", "看參數", "讀取攝影機參數、字幕機設定、重開機排程"),
     ("param.edit", "改參數", "修改攝影機參數（名稱、出入口、音量、辨識）"),
     ("gate.rule", "改開閘規則", "修改白名單開閘規則、開閘輸出口（只有主控公司）"),
@@ -61,6 +62,11 @@ CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY, ts TEXT NOT NULL, company_id INTEGER, site_id INTEGER, username TEXT,
   ip TEXT, action TEXT NOT NULL, target TEXT, detail TEXT, result TEXT);
 CREATE INDEX IF NOT EXISTS audit_company ON audit(company_id, id);
+CREATE TABLE IF NOT EXISTS events(
+  id INTEGER PRIMARY KEY, ts TEXT NOT NULL, received TEXT NOT NULL, site_id INTEGER NOT NULL REFERENCES sites(id),
+  gateway_id TEXT NOT NULL, camera_id TEXT NOT NULL, camera_name TEXT NOT NULL, plate TEXT NOT NULL,
+  direction TEXT NOT NULL, is_whitelist INTEGER NOT NULL, confidence INTEGER, photo BLOB);
+CREATE INDEX IF NOT EXISTS events_site_ts ON events(site_id, ts);
 """
 
 _lock = threading.RLock()
@@ -79,6 +85,11 @@ def conn():
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA foreign_keys = ON")
         _conn.executescript(SCHEMA)
+        # 同一支攝影機同一秒同一車牌只留一筆（小主機重送不會重複）；建索引前先清掉舊資料裡的重複，不然會啟動失敗
+        if not _conn.execute("SELECT 1 FROM sqlite_master WHERE name='events_dedupe'").fetchone():
+            _conn.execute("""DELETE FROM events WHERE id NOT IN
+                             (SELECT MIN(id) FROM events GROUP BY site_id, camera_id, ts, plate)""")
+            _conn.execute("CREATE UNIQUE INDEX events_dedupe ON events(site_id, camera_id, ts, plate)")
     return _conn
 
 
