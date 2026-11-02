@@ -164,7 +164,7 @@
 - 打包：`dist/現場小主機.exe`（`python -m PyInstaller --onefile --console --name 現場小主機 --distpath dist --paths tools remote/gateway.py`），exe 旁放 gateway_config.json 就能跑，已實測能連平台、執行指令。
 - **接真攝影機的步驟**：① 筆電 `python remote/server.py init` 設正式密碼 ② 啟動平台＋`cloudflared tunnel --url http://127.0.0.1:8600` 拿網址 ③ 產生公司電腦用的 gateway_config.json（網址、token、lane1→192.168.1.100、photo_port 80）④ 公司電腦放 現場小主機.exe＋設定檔、點兩下 ⑤ 用通道網址登入管理。quick tunnel 網址每次重開會變，要同步改公司電腦的設定檔。
 - 2026-11-02 在家本機實測通過：登入、白名單讀／新增／刪除、SD 照片查詢（55 張）與下載、重開機、錯誤路徑與別的攝影機代號都會被擋。
-- **2026-11-02 晚上已接上公司真攝影機**：平台跑在使用者筆電（8600）＋ quick tunnel，公司電腦跑 現場小主機.exe（dist/gateway_config.json 同一份）。遠端實測：小主機線上、讀白名單（1 筆）、讀定時重開（每 2 天 02:00）、SD 照片查詢（當天 55 張）與下載一張（51KB）都成功；寫入與重開機遠端還沒測。筆電關機或通道重開就斷，網址會變要重發設定檔。下一步：遠端測新增／刪除白名單、平台加參數設定與 LED 頁、Cloudflare Access、搬到雲端固定網址。
+- **2026-11-02 晚上已接上公司真攝影機**：平台跑在使用者筆電（8600）＋ quick tunnel，公司電腦跑 現場小主機.exe（dist/gateway_config.json 同一份）。遠端實測：小主機線上、讀白名單（1 筆）、讀定時重開（每 2 天 02:00）、SD 照片查詢（當天 55 張）與下載一張（51KB）都成功；2026-11-02 遠端新增／刪除白名單（TEST999）也成功，稽核紀錄有記；重開機遠端還沒測。筆電關機或通道重開就斷，網址會變要重發設定檔。下一步：平台加參數設定與 LED 頁、Cloudflare Access、搬到雲端固定網址。
 
 ## 大架構（RYW 2026-11-02 提出，部分待定）
 
