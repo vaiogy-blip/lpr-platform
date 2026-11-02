@@ -1,0 +1,7 @@
+# 攝影機實測原始紀錄：含車牌與人物照片，屬個資，不上傳
+tools/captures/
+tools/captures_gate_trial/
+
+__pycache__/
+*.pyc
+.env
