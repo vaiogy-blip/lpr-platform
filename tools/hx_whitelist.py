@@ -80,7 +80,13 @@ def confirm_write(ip, action, plate):
         if input("確定是沒接柵欄的測試攝影機嗎？輸入 yes 繼續：").strip().lower() != "yes":
             print("已取消。")
             sys.exit(1)
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures_hx_whitelist")
+    log_operation(ip, action, plate)
+
+
+def log_operation(ip, action, plate):
+    # 打包成 .exe 時 __file__ 在暫存資料夾，關掉就消失，所以改放在 .exe 旁邊
+    base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+    log_dir = os.path.join(base, "captures_hx_whitelist")
     os.makedirs(log_dir, exist_ok=True)
     with open(os.path.join(log_dir, "operation_log.txt"), "a", encoding="utf-8") as f:
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{ip}\t{action}\t{plate}\n")

@@ -4,3 +4,8 @@ tools/captures*/
 __pycache__/
 *.pyc
 .env
+
+# 打包輸出（.exe）
+build/
+dist/
+*.spec
