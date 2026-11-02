@@ -93,7 +93,11 @@ class TrialHandler(Handler):
             print(f"  車牌 {parsed.get('plate_num')}：攝影機白名單比對＝{hit}")
             print("=" * 50)
             self.log(f"plate\t{parsed.get('plate_num')}\tis_whitelist={parsed.get('is_whitelist')}")
-            return None, b""
+            # 華夏 2018 文件說指令也可以搭在辨識結果的回覆裡，所以這裡也送（不含開閘）
+            body = json.dumps(candidate(self.candidate, self.plate, self.action), ensure_ascii=False).encode("utf-8")
+            print(f"  >>> 也在這筆辨識的回覆送出白名單 {self.action}，請再拿照片對鏡頭一次看結果。")
+            self.log(f"plate-reply\t候選{self.candidate}\t{self.action}\t{body.decode('utf-8')}")
+            return "application/json", body
 
         if kind == "heartbeat" and TrialHandler.sent < SEND_TIMES:
             TrialHandler.sent += 1
