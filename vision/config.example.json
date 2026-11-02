@@ -1,0 +1,33 @@
+{
+  "_說明": "複製成 config.json 再填。config.json 有攝影機帳密，不進 git、不要傳給別人。",
+
+  "camera_host": "192.168.1.xxx",
+  "camera_port": 554,
+  "camera_user": "admin",
+  "camera_password": "在這裡填密碼",
+  "_camera_說明": "上面是共用的（錄影主機同一個 IP、帳密）；下面每支攝影機沒寫的欄位就用上面的",
+
+  "cameras": [
+    {"name": "顧車", "rtsp_path": "填第3路的路徑", "motion": true, "snapshot_interval_s": 60},
+    {"name": "金爐", "rtsp_path": "填第2路的路徑", "motion": true, "snapshot_interval_s": 60},
+    {"name": "巷弄機車", "rtsp_path": "填第4路的路徑", "motion": true, "snapshot_interval_s": 60}
+  ],
+  "_rtsp_path_常見": "海康 /Streaming/Channels/301（第3路主碼流）；大華 /cam/realmonitor?channel=3&subtype=0；雄邁(XMeye) /user=帳號&password=密碼&channel=3&stream=0.sdp",
+
+  "data_dir": "data",
+  "retention_days": 90,
+  "min_free_gb": 20,
+
+  "roi": [0.0, 0.06, 1.0, 0.92],
+  "_roi_說明": "只看畫面這個範圍（0～1 比例：左、上、右、下），用來排除疊印的時間、攝影機名稱。每支攝影機也可以各自寫 roi",
+
+  "motion_threshold": 0.015,
+  "sample_interval_s": 0.4,
+  "max_frames_per_event": 5,
+  "event_gap_s": 2.0,
+  "max_event_s": 20,
+  "repeat_save_s": 3600,
+  "_repeat_save_s_說明": "定時拍照時，同一支攝影機、同一個車牌字幾秒內只存一次（停著的車才不會整天重複存）",
+  "min_plate_height": 12,
+  "save_full_frame": true
+}

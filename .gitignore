@@ -17,3 +17,9 @@ remote/data/
 remote/*.log
 psc/data/
 gateway_log.txt*
+
+# 自建車牌辨識（vision/）：照片、紀錄是個資；config.json 有攝影機帳密
+vision/data/
+vision/config.json
+vision/.venv/
+vision/build_out/

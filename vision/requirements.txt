@@ -1,0 +1,5 @@
+# 全部免費、可商用授權（Apache-2.0 / MIT / BSD）
+rapidocr_onnxruntime==1.4.4
+opencv-python==5.0.0.93
+numpy==2.5.4
+onnxruntime==1.31.1
