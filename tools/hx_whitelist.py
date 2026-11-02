@@ -18,9 +18,11 @@
   python hx_whitelist.py 192.168.1.100 delete S30438
 """
 
+import os
 import socket
 import struct
 import sys
+from datetime import datetime
 
 PORT = 8117
 HEADER = 32
@@ -71,11 +73,25 @@ def show(cmd_name, rtype, status, expect):
     return ok
 
 
+def confirm_write(ip, action, plate):
+    """寫入前確認（安全審查 2026-11-02 建議）：防止打錯 IP 改到有接柵欄的攝影機。加 --yes 可略過。"""
+    if "--yes" not in sys.argv:
+        print(f"⚠️ 即將對攝影機 {ip} {action} 白名單 {plate}。寫入白名單的車到場會自動開閘。")
+        if input("確定是沒接柵欄的測試攝影機嗎？輸入 yes 繼續：").strip().lower() != "yes":
+            print("已取消。")
+            sys.exit(1)
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures_hx_whitelist")
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "operation_log.txt"), "a", encoding="utf-8") as f:
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{ip}\t{action}\t{plate}\n")
+
+
 def main():
-    if len(sys.argv) < 3:
+    args_all = [a for a in sys.argv[1:] if a != "--yes"]
+    if len(args_all) < 2:
         print(__doc__)
         sys.exit(1)
-    ip, action, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+    ip, action, args = args_all[0], args_all[1], args_all[2:]
 
     if action == "list":
         rtype, status, data = send(ip, CMD_LIST)
@@ -89,9 +105,11 @@ def main():
                   f"時間 {field(data, 38, 11)}～{field(data, 49, 11)}，類型 {field(data, 60, 11)}")
     elif action == "add" and len(args) == 3:
         plate, begin, end = args[0].upper(), args[1], args[2]
+        confirm_write(ip, "新增／更新", plate)
         rtype, status, _ = send(ip, CMD_ADD, record(plate, begin, end, "00:00:00", "23:59:59", "W"))
         show(f"新增／更新 {plate}（{begin}～{end}）", rtype, status, CMD_ADD + 1)
     elif action == "delete" and len(args) == 1:
+        confirm_write(ip, "刪除", args[0].upper())
         rtype, status, _ = send(ip, CMD_DELETE, record(args[0].upper()))
         show(f"刪除 {args[0]}", rtype, status, CMD_DELETE + 1)
     else:
