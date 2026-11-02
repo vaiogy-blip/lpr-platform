@@ -159,6 +159,10 @@
 - **平台** `remote/server.py`：管理網頁（登入：密碼 PBKDF2 存在 `remote/server_config.json`，不進 git；`python server.py init` 設定密碼並產生小主機 token）、`/gw/poll` 給小主機長輪詢、`/api/cmd` 下指令並等結果（最多 45 秒）、稽核紀錄 `remote/data/audit_log.txt`。只綁 127.0.0.1:8600，對外用 cloudflared 通道。暫時跑在 RYW 筆電，之後搬 Google Cloud。
 - **小主機** `remote/gateway.py`：設定檔 `remote/gateway_config.json`（不進 git，範例 gateway_config.example.json：平台網址、gateway_id、token、攝影機代號→IP）。平台只能用攝影機代號，IP 只在小主機本機；指令只接受 wl_list／wl_add／wl_delete／restart_info／reboot／led_get／led_set／photo_query／photo_get，參數在小主機再檢查一次。重用 tools/ 的 hx_whitelist、hx_led、hx_camera、whitelist_app 的檢查函式。
 - **假攝影機** `tools/fake_camera.py`：在家開發用，資料來自 `tools/captures_camera_snapshot/`（只在 RYW 筆電，不進 git）。白名單 127.0.0.1:8117、網頁 8000、照片 8081。
+- 測試部、安全審查（2026-11-02）提的問題已修：依 IP 鎖登入並記真實 IP（Cf-Connecting-Ip）、看照片也寫稽核、指令 id 用亂數且只收原小主機的結果、Host 白名單（本機／*.trycloudflare.com／設定檔 allowed_hosts）、每台小主機最多排 20 筆、小主機離線立刻回報、小主機任何錯誤都不會結束程式、小主機強制 https。
+- **還沒做（安全審查建議）**：上網前在 cloudflared 前加 Cloudflare Access（email 一次性驗證碼）；正式上雲改成每人帳號＋2FA、稽核記真實帳號；稽核紀錄輪替備份。目前測試用密碼要在接真攝影機前用 `python remote/server.py init` 換掉（會重新產生 token）。
+- 打包：`dist/現場小主機.exe`（`python -m PyInstaller --onefile --console --name 現場小主機 --distpath dist --paths tools remote/gateway.py`），exe 旁放 gateway_config.json 就能跑，已實測能連平台、執行指令。
+- **接真攝影機的步驟**：① 筆電 `python remote/server.py init` 設正式密碼 ② 啟動平台＋`cloudflared tunnel --url http://127.0.0.1:8600` 拿網址 ③ 產生公司電腦用的 gateway_config.json（網址、token、lane1→192.168.1.100、photo_port 80）④ 公司電腦放 現場小主機.exe＋設定檔、點兩下 ⑤ 用通道網址登入管理。quick tunnel 網址每次重開會變，要同步改公司電腦的設定檔。
 - 2026-11-02 在家本機實測通過：登入、白名單讀／新增／刪除、SD 照片查詢（55 張）與下載、重開機、錯誤路徑與別的攝影機代號都會被擋。**還沒接真攝影機**：下一步把 gateway 打包成 exe 放公司電腦（gateway_config 填 192.168.1.100），平台開 cloudflared 通道給它連。
 
 ## 大架構（RYW 2026-11-02 提出，部分待定）
