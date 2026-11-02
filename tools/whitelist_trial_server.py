@@ -60,6 +60,15 @@ def candidate(n, plate, action):
             fmt = (lambda t: t.replace("-", "/")) if n == 5 else (lambda t: t)
             entry.update(Type="W", Start=fmt(START), End=fmt(END))
         return {"error_num": 0, "error_str": "noerror", "whitelist_opt_data": [entry]}
+    # 7、8：Gemini 2026-11-02 回答的 white_list（oper／count／list），沒有廠商文件佐證
+    if n in (7, 8):
+        entry = {"plate": plate}
+        if action != "delete":
+            entry.update(enable=1, need_alarm=0, start_time=START, end_time=END)
+        white_list = {"oper": "delete" if action == "delete" else "add", "count": 1, "list": [entry]}
+        if n == 7:
+            return {"error_num": 0, "error_str": "noerror", "white_list": white_list}
+        return {"Response_AlarmInfoPlate": {"info": "ok", "content": "", "is_pay": "true"}, "white_list": white_list}
     return None
 
 
@@ -70,6 +79,8 @@ CANDIDATE_NAMES = {
     4: "addWhiteList／deleteWhiteList（carnum／startime／endtime）",
     5: "error_num＋華夏 whitelist_opt_data（日期用 /）",
     6: "error_num＋華夏 whitelist_opt_data（日期用 -）",
+    7: "Gemini：error_num＋white_list（oper／count／list）",
+    8: "Gemini 原樣：Response_AlarmInfoPlate＋white_list（info=ok，會開閘）",
 }
 
 

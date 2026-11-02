@@ -256,6 +256,8 @@ def watch_outbox():
             payload = payload.strip()
             with clients_lock:
                 targets = [c for c in clients if any(topic_matches(s, topic) for s in c.subs)]
+            if not targets:
+                continue  # 攝影機還沒連上或還沒訂閱，先留著，連上後再送
             for c in targets:
                 c.publish(topic, payload)
             log(f">>> 送出 {name} → 主題 {topic}，送給 {len(targets)} 台：{payload.decode('utf-8', 'replace')}")
