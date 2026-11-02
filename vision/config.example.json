@@ -33,5 +33,9 @@
   "repeat_save_s": 3600,
   "_repeat_save_s_說明": "定時拍照時，同一支攝影機、同一台車幾秒內只存一次（停著的車才不會整天重複存）",
   "min_plate_height": 12,
-  "save_full_frame": true
+  "save_full_frame": true,
+
+  "label_port": 8790,
+  "dataset_retention_days": 90,
+  "_dataset_retention_days_說明": "標好的訓練資料、人工答案留幾天（預設跟照片一樣 90 天，到期刪除）。設大可以留更久，但也是個資"
 }

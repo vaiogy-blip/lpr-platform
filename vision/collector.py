@@ -32,6 +32,7 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import cv2  # noqa: E402  （上面的環境變數要在載入 cv2 前設定）
 import numpy as np  # noqa: E402
 
+import labels  # noqa: E402
 import stats  # noqa: E402
 import storage  # noqa: E402
 from plate_ocr import PlateReader, light_condition, pad_rect  # noqa: E402
@@ -43,6 +44,7 @@ MOTION_WIDTH = 640       # 偵測動靜時把畫面縮到這個寬度
 WARMUP_FRAMES = 30       # 剛開始讓背景模型先學一下，不算動靜
 MOTION_FPS_GAP = 0.12    # 偵測動靜每秒看約 8 張就夠
 STATUS_EVERY_S = 60
+EXPORT_GRACE_DAYS = 7    # 每日匯出失敗時，過期照片多留幾天
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)),
                     *(f"LPT{i}" for i in range(10))}
 CAMERA_KEYS = ("host", "port", "user", "password", "rtsp_path", "channel", "roi",
@@ -161,7 +163,8 @@ class FileSource:
     """影片檔：一張一張照順序讀，時間用影格數換算。"""
     realtime = False
 
-    def __init__(self, path):
+    def __init__(self, path, paced=False):
+        """paced：照真實時間播（處理太慢就跳過畫面），車道測試量秒數時要用，跟接攝影機一樣。"""
         self.name = "test"
         self.cap = cv2.VideoCapture(str(path))
         if not self.cap.isOpened():
@@ -170,11 +173,18 @@ class FileSource:
         self.index = 0
         self.connected = True
         self.ended = False
+        self.paced = paced
+        self.t_begin = None
 
     def read(self, last_ts):
         # 影片每秒 25 張，偵測動靜用 1/4 就夠（跟即時模式差不多）
         frame = None
-        for _ in range(4):
+        steps = 4
+        if self.paced:
+            if self.t_begin is None:
+                self.t_begin = time.time()
+            steps = max(1, int((time.time() - self.t_begin) * self.fps) - self.index)
+        for _ in range(steps):
             ok, f = self.cap.read()
             if not ok:
                 self.ended = True
@@ -490,19 +500,44 @@ def single_instance(data_dir):
     return f
 
 
+_maintenance_lock = threading.Lock()
+
+
+def start_maintenance(cfg, data_dir, worker):
+    """每日整理放到背景做（匯出可能要幾分鐘），攝影機照常看；同時只跑一份。"""
+    def job():
+        if not _maintenance_lock.acquire(blocking=False):
+            return
+        try:
+            worker.drain(30)  # 讓昨天最後幾筆先寫完，再產生昨天的日報
+            daily_maintenance(cfg, data_dir)
+        finally:
+            _maintenance_lock.release()
+    threading.Thread(target=job, daemon=True).start()
+
+
 def daily_maintenance(cfg, data_dir):
-    """產生昨天以前的日報、刪除過期照片。"""
+    """產生昨天以前的日報、匯出訓練資料、刪除過期照片。"""
     # 每一步各自保護：日報失敗不能擋住刪除，也不能讓程式停掉
     try:
         for day in stats.fill_missing_reports(data_dir, storage.today()):
             log.info("已產生日報 %s", day)
     except Exception:
         log.exception("產生日報時出錯（略過，程式繼續）")
+    retention = cfg["retention_days"]
+    try:
+        # 刪照片前先把標好的答案和切圖匯出，免得跟著照片一起被刪
+        r = labels.export_dataset(data_dir, cfg["dataset_retention_days"])
+        log.info("已匯出訓練資料：共 %d 張，新增 %d 張", r["total"], r["copied"])
+    except Exception:
+        # 匯出失敗：多寬限 7 天再刪，讓人有時間處理；但不能永遠不刪（硬碟會滿、個資留太久）
+        retention += EXPORT_GRACE_DAYS
+        log.exception("匯出訓練資料時出錯，過期照片多留 %d 天再刪", EXPORT_GRACE_DAYS)
     try:
         for f in data_dir.glob("test_frame_*.jpg"):
             if time.time() - f.stat().st_mtime > 86400:
                 f.unlink(missing_ok=True)  # 測試畫面可能拍到人，留一天就刪
-        removed = storage.delete_expired(data_dir, cfg["retention_days"])
+        removed = storage.delete_expired(data_dir, retention)
         if removed:
             log.info("已刪除超過 %s 天的資料：%s", cfg["retention_days"], "、".join(removed))
     except Exception:
@@ -544,7 +579,7 @@ def run(cfg, sources, data_dir, max_seconds=None):
     realtime = all(s.source.realtime for s in states)
     started = dt.datetime.now().isoformat(timespec="seconds")
     status_path = data_dir / "status.json"
-    daily_maintenance(cfg, data_dir)
+    start_maintenance(cfg, data_dir, worker)
     write_status(status_path, states, worker, started)
 
     last_status = time.time()
@@ -579,8 +614,7 @@ def run(cfg, sources, data_dir, max_seconds=None):
                     log.exception("寫狀態時出錯（可能硬碟滿了），程式繼續")
                 if storage.today() != current_day:
                     current_day = storage.today()
-                    worker.drain(30)  # 讓昨天最後幾筆先寫完，再產生昨天的日報
-                    daily_maintenance(cfg, data_dir)
+                    start_maintenance(cfg, data_dir, worker)
             if not realtime and worker.queue.qsize() > 30:
                 worker.drain(5)  # 測試影片：等一下處理，不要略過
     except KeyboardInterrupt:
@@ -628,6 +662,10 @@ def test_cameras(cfg, data_dir):
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
+    if len(sys.argv) > 1 and sys.argv[1] == "--lane-test":
+        import lane_test  # 第 4 階段：模擬管制車道（只判斷、不開閘）
+        lane_test.main(sys.argv[2:])
+        return
     ap = argparse.ArgumentParser(description="車牌照片收集程式（只記錄、不開閘）")
     ap.add_argument("--config", help="設定檔（預設是程式旁的 config.json）")
     ap.add_argument("--test-camera", action="store_true", help="測試每支攝影機連線並各存一張畫面")
@@ -635,12 +673,17 @@ def main():
     ap.add_argument("--image", help="只認一張照片的車牌")
     ap.add_argument("--max-seconds", type=float, help="跑幾秒就停（測試用）")
     ap.add_argument("--report", metavar="日期", help="重新產生某一天的日報，例如 2026-11-05")
+    ap.add_argument("--label", action="store_true", help="開標記網頁（只開在本機 http://127.0.0.1:8790）")
     args = ap.parse_args()
 
     cfg = storage.load_config(args.config)
     data_dir = storage.resolve_data_dir(cfg)
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.label:
+        import label_server
+        label_server.serve(cfg, data_dir)
+        return
     if args.report:
         if not storage.DAY_RE.match(args.report):
             raise SystemExit("日期格式要像 2026-11-05")

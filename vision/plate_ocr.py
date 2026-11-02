@@ -75,11 +75,21 @@ def pad_rect(rect, shape, ratio):
 
 
 class PlateReader:
-    def __init__(self, min_plate_height=12):
+    def __init__(self, min_plate_height=12, rec_model=None, filter_model=None, det_max_side=None):
+        """det_max_side：找字前把畫面長邊縮到這麼大（車道測試用，車很近、要快）；None = 原尺寸（收集用，遠處小車牌才找得到）。"""
         # 匯入很慢（載入模型），放在這裡才不會拖慢 --help
         from rapidocr_onnxruntime import RapidOCR
-        self.ocr = RapidOCR()
+        kw = {"det_limit_side_len": det_max_side, "det_limit_type": "max"} if det_max_side else {}
+        self.ocr = RapidOCR(**kw)
         self.min_plate_height = min_plate_height
+        # 第 3 階段練好的模型（可選）：認字換成我們的、加上「是不是車牌」過濾器
+        self.rec = self.filter = None
+        if rec_model:
+            from recognizer import OnnxRecognizer
+            self.rec = OnnxRecognizer(rec_model)
+        if filter_model:
+            from recognizer import OnnxPlateFilter
+            self.filter = OnnxPlateFilter(filter_model)
 
     def read(self, frame, roi=None):
         """在一張畫面裡找車牌。
@@ -108,10 +118,18 @@ class PlateReader:
                 continue
             # 認字時四周多留一點，模型比較穩
             cx1, cy1, cx2, cy2 = pad_rect([x1, y1, x2, y2], view.shape, 0.08)
-            rec, _ = self.ocr(view[cy1:cy2, cx1:cx2], use_det=False, use_cls=False, use_rec=True)
-            if not rec:
-                continue
-            raw, conf = rec[0][0], float(rec[0][1])
+            crop = view[cy1:cy2, cx1:cx2]
+            if self.filter and self.filter.is_plate(crop) < 0.5:
+                continue  # 過濾器判斷不是車牌（招牌、衣服上的字）
+            if self.rec:
+                raw, conf = self.rec.read(crop)
+                if not raw:
+                    continue
+            else:
+                rec, _ = self.ocr(crop, use_det=False, use_cls=False, use_rec=True)
+                if not rec:
+                    continue
+                raw, conf = rec[0][0], float(rec[0][1])
             if TIMESTAMP_CHARS.search(raw):
                 continue
             text = normalize(raw)

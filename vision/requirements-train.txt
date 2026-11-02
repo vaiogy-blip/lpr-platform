@@ -1,0 +1,7 @@
+# 訓練用（第 3 階段，plate_trainer）。全部免費、可商用授權
+# PyTorch 另外裝（只從 PyTorch 官方 CPU 來源抓，不跟 PyPI 混）：
+#   .venv\Scripts\python -m pip install torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu
+-r requirements.txt
+onnx==1.23.2
+pillow==13.0.0
+pyinstaller==6.22.3

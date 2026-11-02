@@ -1,0 +1,9 @@
+{
+ "epochs": 10,
+ "val_acc": 0.9527,
+ "synth_val_acc": 0.9527,
+ "real_train": 0,
+ "real_val": 0,
+ "trained": "2026-11-03T03:37:17",
+ "note": "只用假車牌訓練，不含任何真實照片"
+}

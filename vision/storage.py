@@ -41,6 +41,8 @@ DEFAULTS = {
     "snapshot_interval_s": 60,
     "repeat_save_s": 3600,
     "cameras": [],
+    "label_port": 8790,
+    "dataset_retention_days": 90,
 }
 
 
@@ -52,11 +54,16 @@ def base_dir():
 
 
 def load_config(path=None):
+    explicit = path is not None
     path = Path(path) if path else base_dir() / "config.json"
+    if explicit and not path.exists():
+        raise SystemExit(f"找不到設定檔：{path}")
     cfg = dict(DEFAULTS)
     if path.exists():
         with open(path, encoding="utf-8-sig") as f:
             cfg.update({k: v for k, v in json.load(f).items() if not k.startswith("_")})
+    # data_dir 寫相對路徑時，以設定檔所在的資料夾為準（訓練程式借用收集程式的設定檔時才找得到資料）
+    cfg["_config_dir"] = str(path.resolve().parent)
     try:
         cfg["retention_days"] = int(cfg["retention_days"])
     except (TypeError, ValueError):
@@ -68,7 +75,7 @@ def load_config(path=None):
 
 def resolve_data_dir(cfg):
     p = Path(cfg["data_dir"])
-    return (p if p.is_absolute() else base_dir() / p).resolve()
+    return (p if p.is_absolute() else Path(cfg.get("_config_dir") or base_dir()) / p).resolve()
 
 
 def captures_dir(data_dir):

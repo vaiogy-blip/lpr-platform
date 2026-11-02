@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>車牌標記</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+    --accent: #1f6feb; --ok: #1a7f37; --warn: #b54708; --bad: #c62828;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); font-size: 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+           padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 20px; margin: 0 12px 0 0; }
+  .stat { color: var(--muted); }
+  .stat b { color: var(--text); font-size: 18px; }
+  header .spacer { flex: 1; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: bold; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); margin-bottom: 10px; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 14px;
+         background: #fff4e5; color: var(--warn); margin-right: 6px; }
+  .crops { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0; }
+  .crop { border: 2px solid var(--line); border-radius: 10px; padding: 8px; text-align: center; }
+  .crop.off { opacity: .35; }
+  .crop img { display: block; height: 80px; max-width: 100%; image-rendering: auto; margin: 0 auto 6px; }
+  .crop .ocr { font-family: Consolas, monospace; font-size: 18px; }
+  .crop .conf { color: var(--muted); font-size: 13px; }
+  .crop label { display: block; font-size: 14px; margin-top: 4px; cursor: pointer; }
+  .answer { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 8px; }
+  #text { font: bold 34px Consolas, monospace; letter-spacing: 4px; width: 280px; padding: 6px 12px;
+          border: 2px solid var(--accent); border-radius: 10px; text-transform: uppercase; }
+  #fmt { min-width: 200px; }
+  #fmt.ok { color: var(--ok); } #fmt.bad { color: var(--warn); }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .hint { color: var(--muted); font-size: 14px; margin-top: 12px; }
+  #full { margin-top: 14px; display: none; }
+  #full img { max-width: 100%; border-radius: 8px; }
+  #msg { margin: 10px 0; min-height: 22px; }
+  #msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 20px; }
+  .relabel { background: #eef4ff; color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>車牌標記</h1>
+  <span class="stat">待確認 <b id="s-pending">-</b></span>
+  <span class="stat">今天已標 <b id="s-today">-</b></span>
+  <span class="stat">人工答案 <b id="s-human">-</b></span>
+  <span class="stat">自動答案 <b id="s-auto">-</b></span>
+  <span class="spacer"></span>
+  <button id="btn-export" title="把答案和切圖整理到 data/dataset/，給之後訓練用">匯出訓練資料</button>
+</header>
+<main>
+  <div id="msg"></div>
+  <div id="box" class="card"></div>
+  <p class="hint">
+    看圖，把下面的字改成車牌上真正的字（不用打「-」），按 <b>Enter</b> 存並換下一張。<br>
+    切圖如果是別台車、或根本不是車牌，把它下面的勾取消。<br>
+    快速鍵：Enter 正確／存 ｜ F2 看不清楚 ｜ F4 不是車牌 ｜ PageDown 跳過 ｜ PageUp 上一張
+  </p>
+</main>
+<script>
+"use strict";
+const PLATE_FORMATS = [
+  ["3英4數", /^[A-Z]{3}\d{4}$/], ["3英3數", /^[A-Z]{3}\d{3}$/], ["3數3英", /^\d{3}[A-Z]{3}$/],
+  ["2碼4數", /^(?=.*[A-Z])[A-Z0-9]{2}\d{4}$/], ["4數2碼", /^\d{4}(?=.*[A-Z])[A-Z0-9]{2}$/],
+];
+const STATUS_NAME = { unreadable: "看不清楚", not_plate: "不是車牌" };
+let queue = [];        // 待確認
+let history = [];      // 這次標過的 key（上一張用）
+let current = null;
+let busy = false;
+let pendingTotal = 0;  // 伺服器算的待確認總數，標一張就先自己減一
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  kids.forEach((k) => e.append(k));
+  return e;
+};
+const norm = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const imgUrl = (day, rel) => "/img/" + encodeURIComponent(day) + "/" + rel.split("/").map(encodeURIComponent).join("/");
+
+function say(text, cls = "") { $("msg").textContent = text; $("msg").className = cls; }
+
+async function api(path, body) {
+  const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+  const r = await fetch(path, opt);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ("錯誤 " + r.status));
+  return data;
+}
+
+async function refreshSummary(total) {
+  try {
+    const s = await api("/api/summary");
+    $("s-today").textContent = s.human_today;
+    $("s-human").textContent = s.human_total;
+    $("s-auto").textContent = s.auto_total;
+  } catch (e) { /* 統計失敗不影響標記 */ }
+  if (total !== undefined) pendingTotal = total;
+  $("s-pending").textContent = pendingTotal;
+}
+
+async function loadQueue() {
+  const data = await api("/api/pending?limit=40");
+  queue = data.items;
+  refreshSummary(data.total);
+}
+
+function fmtCheck() {
+  const t = norm($("text").value);
+  const hit = PLATE_FORMATS.find(([, re]) => re.test(t));
+  $("fmt").textContent = t ? (hit ? "符合格式：" + hit[0] : "不符合台灣車牌格式（特殊車牌仍可存）") : "";
+  $("fmt").className = hit ? "ok" : "bad";
+}
+
+function render(item) {
+  current = item;
+  const box = $("box");
+  box.replaceChildren();
+  if (!item) {
+    box.append(el("div", { className: "empty", textContent: "目前沒有要確認的車牌，辛苦了！" }));
+    return;
+  }
+  const meta = el("div", { className: "meta" });
+  (item.reasons || []).forEach((r) => meta.append(el("span", { className: "tag", textContent: r })));
+  if (item.label) meta.append(el("span", { className: "tag relabel", textContent: "已標過：" + (item.label.text || STATUS_NAME[item.label.status] || item.label.status) + "（可改）" }));
+  meta.append(el("span", { textContent: item.camera }),
+              el("span", { textContent: item.time.replace("T", " ") }),
+              el("span", { textContent: item.light === "night" ? "晚上" : "白天" }),
+              el("span", { textContent: item.kind === "snapshot" ? "定時拍照" : "有車經過" }));
+  box.append(meta);
+
+  const crops = el("div", { className: "crops" });
+  const included = item.label && item.label.include ? new Set(item.label.include) : null;
+  item.reads.forEach((r) => {
+    const cb = el("input", { type: "checkbox", checked: included ? included.has(r.i) : true });
+    cb.dataset.i = r.i;
+    const card = el("div", { className: "crop" },
+      el("img", { src: imgUrl(item.day, r.crop), alt: "車牌切圖" }),
+      el("div", { className: "ocr", textContent: r.text }),
+      el("div", { className: "conf", textContent: "信心度 " + r.conf.toFixed(2) + (r.format ? "" : "・格式不符") }),
+      el("label", {}, cb, " 同一個車牌"));
+    cb.addEventListener("change", () => card.classList.toggle("off", !cb.checked));
+    if (!cb.checked) card.classList.add("off");
+    crops.append(card);
+  });
+
+  const input = el("input", { id: "text", value: (item.label && item.label.text) || item.suggest, autocomplete: "off", spellcheck: false });
+  input.addEventListener("input", fmtCheck);
+  box.append(el("div", { className: "answer" }, input, el("span", { id: "fmt" })));
+
+  const actions = el("div", { className: "actions" });
+  const btn = (text, cls, fn) => { const b = el("button", { textContent: text, className: cls }); b.onclick = fn; actions.append(b); };
+  btn("正確／存（Enter）", "primary", () => save("ok"));
+  btn("看不清楚（F2）", "", () => save("unreadable"));
+  btn("不是車牌（F4）", "", () => save("not_plate"));
+  btn("跳過", "", skip);
+  btn("上一張", "", back);
+  if (item.full) {
+    btn("看完整畫面", "", () => { const f = $("full"); f.style.display = f.style.display === "block" ? "none" : "block"; });
+  }
+  box.append(actions);
+  box.append(crops);  // 答案和按鈕放上面，切圖多的時候不用捲動就能按
+  if (item.full) box.append(el("div", { id: "full" }, el("img", { src: imgUrl(item.day, item.full), alt: "完整畫面" })));
+
+  fmtCheck();
+  input.focus();
+  input.select();
+}
+
+async function save(status) {
+  if (!current || busy) return;
+  const include = [...document.querySelectorAll(".crop input[type=checkbox]")].filter((c) => c.checked).map((c) => +c.dataset.i);
+  const text = norm($("text").value);
+  if (status === "ok" && include.length === 0) { say("至少要勾一張切圖，或按「不是車牌」。", "err"); return; }
+  if (status === "ok" && (text.length < 2 || text.length > 8)) { say("車牌字要 2～8 個英文或數字。", "err"); return; }
+  busy = true;
+  try {
+    await api("/api/label", { key: current.key, status, text, include });
+    if (!current.label) pendingTotal = Math.max(0, pendingTotal - 1);
+    history.push(current.key);
+    say("已存：" + (status === "ok" ? text : STATUS_NAME[status]), "ok");
+    queue = queue.filter((x) => x.key !== current.key);
+  } catch (e) {
+    say("存檔失敗：" + e.message, "err");
+    busy = false;
+    return;
+  }
+  try {
+    await next();
+  } catch (e) {
+    say("已存好，但讀下一張失敗（重新整理網頁即可）：" + e.message, "err");
+  } finally { busy = false; }
+}
+
+async function next() {
+  if (queue.length === 0) await loadQueue();
+  else refreshSummary();
+  render(queue[0] || null);
+}
+
+function skip() {
+  if (!current) return;
+  queue = queue.filter((x) => x.key !== current.key);
+  queue.push(current);  // 放到最後，等一下再看
+  render(queue.length > 1 ? queue[0] : current);
+}
+
+async function back() {
+  const key = history.pop();
+  if (!key) { say("這次還沒標過任何一張。"); return; }
+  try {
+    const item = await api("/api/item?key=" + encodeURIComponent(key));
+    history = history.filter((k) => k !== key);
+    render(item);
+  } catch (e) { say("讀不到上一張：" + e.message, "err"); }
+}
+
+document.addEventListener("keydown", (e) => {
+  // 按住不放（連發）或中文輸入法選字中的 Enter 都不算，免得沒看清楚就存了下一張
+  if (e.repeat || e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Enter") { e.preventDefault(); save("ok"); }
+  else if (e.key === "F2") { e.preventDefault(); save("unreadable"); }
+  else if (e.key === "F4") { e.preventDefault(); save("not_plate"); }
+  else if (e.key === "PageDown") { e.preventDefault(); skip(); }
+  else if (e.key === "PageUp") { e.preventDefault(); back(); }
+});
+
+$("btn-export").onclick = async () => {
+  const b = $("btn-export");
+  b.disabled = true;
+  say("匯出中…");
+  try {
+    const r = await api("/api/export", {});
+    const parts = Object.entries(r.by_split).map(([k, v]) => ({ train: "訓練", exam: "考卷", holdout: "保留", unreadable: "看不清楚", not_plate: "不是車牌" }[k] || k) + " " + v);
+    say("匯出完成：共 " + r.total + " 張（" + parts.join("、") + "），這次新增 " + r.copied + " 張。", "ok");
+  } catch (e) { say("匯出失敗：" + e.message, "err"); }
+  b.disabled = false;
+};
+
+next().catch((e) => say("讀取失敗：" + e.message, "err"));
+</script>
+</body>
+</html>
