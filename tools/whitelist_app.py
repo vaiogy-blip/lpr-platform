@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import hx_led
-from hx_whitelist import CMD_ADD, CMD_DELETE, CMD_LIST, log_operation, record, send
+from hx_whitelist import CMD_ADD, CMD_DELETE, CMD_LIST, log_dir, log_operation, record, send
 
 PORT = int(os.environ.get("PORT", 8090))
 DEFAULT_CAMERA = "192.168.1.100"
@@ -101,12 +101,19 @@ def save_led(ip, view):
     if not isinstance(view, dict):
         raise BadRequest("字幕機資料格式錯誤")
     try:
-        result = hx_led.write(ip, view)
+        before = hx_led.read_raw(ip)
+        # 存一份修改前的設定，出事可以對照還原
+        with open(os.path.join(log_dir(), f"led_backup_{datetime.now():%Y%m%d-%H%M%S}.json"), "w", encoding="utf-8") as f:
+            json.dump(before, f, ensure_ascii=False, indent=1)
+        changes = hx_led.write(ip, before, view)
+    except OSError:
+        log_operation(ip, "網頁改字幕機（連線失敗）", "-")
+        raise
     except (ValueError, KeyError, TypeError) as e:
         log_operation(ip, f"網頁改字幕機（失敗：{e}）", "-")
         raise BadRequest(str(e) if isinstance(e, ValueError) else "字幕機資料格式錯誤")
-    log_operation(ip, "網頁改字幕機（成功）", "-")
-    return {"led": result}
+    log_operation(ip, f"網頁改字幕機（成功）{'；'.join(changes) or '沒有變更'}", "-")
+    return {"led": hx_led.to_view(hx_led.read_raw(ip))}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -137,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply_json(400, {"ok": False, "error": str(e)})
         except OSError as e:
             self.reply_json(502, {"ok": False, "error": f"連不到攝影機：{e}"})
+        except (ValueError, KeyError, TypeError):
+            self.reply_json(502, {"ok": False, "error": "攝影機回傳的資料看不懂，請確認 IP 是不是華夏攝影機"})
 
     def do_GET(self):
         if not self.from_this_page():
@@ -230,7 +239,7 @@ const today=new Date(),pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'
 $('begin').value=iso(today);const ny=new Date(today);ny.setFullYear(ny.getFullYear()+1);$('end').value=iso(ny);
 function msg(t,ok){$('msg').textContent=t;$('msg').className=ok?'okmsg':'err'}
 async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});return r.json()}
-function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function load(){const tb=$('list');tb.innerHTML='<tr><td colspan="4" class="empty">讀取中…</td></tr>';
  const d=await api('/api/list?ip='+encodeURIComponent($('ip').value.trim()));
  if(!d.ok){tb.innerHTML='<tr><td colspan="4" class="empty err">'+esc(d.error)+'</td></tr>';return}
@@ -253,7 +262,7 @@ function lineRows(kind,flags){return led.lines.map((l,i)=>'<div class="ledline">
  '</div><input class="'+kind+'_text" data-i="'+i+'" value="'+esc(l[kind+'_text'])+'" placeholder="自訂文字">'+colorSel(l[kind+'_color'],kind+'_color',i)+'</div>').join('')}
 function renderLed(){const c=$('ledcard');
  c.innerHTML='<div class="opt"><label>顯示方式 <select id="ledmode">'+Object.entries(MODES).map(([k,n])=>'<option value="'+k+'"'+(k==led.mode?' selected':'')+'>'+n+'</option>').join('')+'</select></label>'+
- '<span class="ln">協定 '+led.protocol+'</span></div>'+
+ '<span class="ln">協定 '+esc(led.protocol)+'</span></div>'+
  '<h3>沒有車的時候</h3>'+lineRows('idle',IDLE)+'<h3>車子來的時候</h3>'+lineRows('busy',BUSY)+
  '<h3>語音</h3><div class="opt"><label><input type="checkbox" id="vplate"'+(led.voice_plate?' checked':'')+'>播報車牌</label>'+
  '<label><input type="checkbox" id="vwel"'+(led.voice_welcome_on?' checked':'')+'>歡迎語</label><select id="vweltext">'+

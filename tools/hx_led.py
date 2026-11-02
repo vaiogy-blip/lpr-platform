@@ -60,9 +60,10 @@ def to_view(led):
             "busy_text": rule.get("entrance_busy_custom", ""),
             "busy_color": rule.get("entrance_card_color", 0),
         })
+    protocol = led.get("led_protocol", 0)
     return {
         "mode": led.get("led_mode", 0),
-        "protocol": led.get("led_protocol", 0),
+        "protocol": protocol if type(protocol) is int else "?",  # 攝影機回來的值不直接信任
         "lines": lines,
         "voice_plate": led.get("entrance_voice_plate_enable", 0) == 1,
         "voice_welcome_on": led.get("entrance_voice_welcome_enable", 0) == 1,
@@ -70,9 +71,23 @@ def to_view(led):
     }
 
 
+def choice(value, allowed, what):
+    if type(value) is not int or value not in allowed:
+        raise ValueError(f"{what}不對")
+    return value
+
+
+def flag(value):
+    if type(value) is not bool:
+        raise ValueError("勾選欄位格式不對")
+    return 1 if value else 0
+
+
 def check_text(text):
     if not isinstance(text, str):
         raise ValueError("文字格式不對")
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise ValueError("文字裡不能有換行或控制字元")
     try:
         size = len(text.encode("gbk"))
     except UnicodeEncodeError:
@@ -84,12 +99,9 @@ def check_text(text):
 
 def apply_view(led, view):
     """把網頁送來的入口設定套回攝影機的原始設定（其他欄位不動）。"""
-    mode = int(view["mode"])
-    if mode not in MODES:
-        raise ValueError("字幕機模式不對")
-    led["led_mode"] = mode
-    led["entrance_voice_plate_enable"] = 1 if view["voice_plate"] else 0
-    led["entrance_voice_welcome_enable"] = 1 if view["voice_welcome_on"] else 0
+    led["led_mode"] = choice(view["mode"], MODES, "字幕機模式")
+    led["entrance_voice_plate_enable"] = flag(view["voice_plate"])
+    led["entrance_voice_welcome_enable"] = flag(view["voice_welcome_on"])
     if view["voice_welcome"] not in WELCOMES + (led.get("entrance_voice_welcome"),):
         raise ValueError("歡迎語只能選歡迎光臨或歡迎回家")
     led["entrance_voice_welcome"] = view["voice_welcome"]
@@ -98,21 +110,27 @@ def apply_view(led, view):
         raise ValueError("行數不對，請重新讀取")
     for rule, line in zip(rules, view["lines"]):
         for f in IDLE_FLAGS:
-            rule[f"entrance_{f}_enable"] = 1 if line["idle"][f] else 0
+            rule[f"entrance_{f}_enable"] = flag(line["idle"][f])
         for f in BUSY_FLAGS:
-            rule[f"entrance_{f}_enable"] = 1 if line["busy"][f] else 0
+            rule[f"entrance_{f}_enable"] = flag(line["busy"][f])
         rule["entrance_idle_custom"] = check_text(line["idle_text"])
         rule["entrance_busy_custom"] = check_text(line["busy_text"])
-        for key, value in (("entrance_color", line["idle_color"]), ("entrance_card_color", line["busy_color"])):
-            if int(value) not in (0, 1, 2):
-                raise ValueError("顏色不對")
-            rule[key] = int(value)
+        rule["entrance_color"] = choice(line["idle_color"], (0, 1, 2), "顏色")
+        rule["entrance_card_color"] = choice(line["busy_color"], (0, 1, 2), "顏色")
         rule["entrance_temp_color"] = rule["entrance_card_color"]  # 臨停車、月租車先用同一個顏色
     return led
 
 
-def write(ip, view):
-    led = apply_view(read_raw(ip), view)
+def diff(before, after):
+    """列出改了哪些欄位，寫進操作紀錄。"""
+    a, b = flatten(before), flatten(after)
+    return [f"{k}: {a.get(k)!r}→{b[k]!r}" for k in b if a.get(k) != b[k]]
+
+
+def write(ip, before, view):
+    """before 是剛讀回的原始設定；只改入口欄位後整份送回。回傳改了哪些欄位。"""
+    led = apply_view(json.loads(json.dumps(before)), view)
+    changes = diff(before, led)
     body = urllib.parse.urlencode(flatten(led)).encode("utf-8")
     req = urllib.request.Request(_url(ip, "set.cgi"), data=body,
                                  headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
@@ -120,4 +138,4 @@ def write(ip, view):
         reply = r.read().strip()
     if reply != b"0":
         raise ValueError(f"攝影機沒有接受字幕機設定（回覆 {reply[:50]!r}）")
-    return to_view(read_raw(ip))
+    return changes

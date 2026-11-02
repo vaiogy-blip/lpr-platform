@@ -83,13 +83,18 @@ def confirm_write(ip, action, plate):
     log_operation(ip, action, plate)
 
 
-def log_operation(ip, action, plate):
+def log_dir():
     # 打包成 .exe 時 __file__ 在暫存資料夾，關掉就消失，所以改放在 .exe 旁邊
     base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
-    log_dir = os.path.join(base, "captures_hx_whitelist")
-    os.makedirs(log_dir, exist_ok=True)
-    with open(os.path.join(log_dir, "operation_log.txt"), "a", encoding="utf-8") as f:
-        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{ip}\t{action}\t{plate}\n")
+    path = os.path.join(base, "captures_hx_whitelist")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def log_operation(ip, action, plate):
+    clean = lambda s: " ".join(str(s).split())  # 換行、Tab 換成空白，避免偽造紀錄行
+    with open(os.path.join(log_dir(), "operation_log.txt"), "a", encoding="utf-8") as f:
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{clean(ip)}\t{clean(action)}\t{clean(plate)}\n")
 
 
 def main():
