@@ -29,7 +29,7 @@ from hx_whitelist import log_operation  # noqa: E402
 from whitelist_app import (BadRequest, add_item, check_date, check_plate, delete_item,  # noqa: E402
                            list_whitelist, reboot_camera, save_led)
 
-VERSION = "0.1"
+VERSION = "0.2"
 POLL_TIMEOUT = 40  # 平台最多讓長輪詢等 25 秒
 
 
@@ -68,7 +68,7 @@ def run_command(cfg, cmd):
     if kind == "wl_list":
         return {"items": list_whitelist(ip)}
     if kind == "wl_add":
-        add_item(ip, check_plate(args.get("plate", "")), check_date(args.get("begin", "")), check_date(args.get("end", "")))
+        add_item(ip, check_plate(args.get("plate", "")), check_date(args.get("begin", "")), check_date(args.get("end", ""), end=True))
         return {}
     if kind == "wl_delete":
         delete_item(ip, check_plate(args.get("plate", "")))

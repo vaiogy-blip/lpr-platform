@@ -53,24 +53,34 @@ def check_plate(plate):
     return plate
 
 
-def check_date(text):
-    try:
-        return datetime.strptime(str(text), "%Y-%m-%d").strftime("%Y/%m/%d")
-    except ValueError:
-        raise BadRequest(f"日期格式不對：{text}")
+def check_date(text, end=False):
+    """有效期間精準到秒：網頁送 yyyy-mm-ddTHH:MM[:SS]，回傳攝影機要的 (yyyy/MM/dd, HH:mm:ss)。
+    只給日期（舊版網頁）時，開始算 00:00:00、結束算 23:59:59。"""
+    text = str(text)
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            moment = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        if fmt == "%Y-%m-%d" and end:
+            moment = moment.replace(hour=23, minute=59, second=59)
+        return moment.strftime("%Y/%m/%d"), moment.strftime("%H:%M:%S")
+    raise BadRequest(f"日期時間格式不對：{text}")
 
 
 def list_whitelist(ip):
     rtype, status, data = send(ip, CMD_LIST)
     if rtype != CMD_LIST + 1 or status != 1:
         raise BadRequest(f"攝影機沒有回應讀取（代碼 {rtype}，狀態 {status}）")
-    today = datetime.now().strftime("%Y/%m/%d")
+    now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
     items = []
     for line in data.split(b"\x00")[0].decode("gb2312", errors="replace").splitlines():
         cols = line.split("\t")
         if len(cols) >= 3 and cols[0].strip():
-            begin, end = cols[1], cols[2]
-            state = "有效" if begin <= today <= end else ("已過期" if end < today else "還沒開始")
+            # 攝影機回：車牌、開始日期、結束日期、開始時間、結束時間、類型
+            begin = f"{cols[1]} {cols[3] if len(cols) > 3 and cols[3] else '00:00:00'}"
+            end = f"{cols[2]} {cols[4] if len(cols) > 4 and cols[4] else '23:59:59'}"
+            state = "有效" if begin <= now <= end else ("已過期" if end < now else "還沒開始")
             items.append({"plate": cols[0], "begin": begin, "end": end, "state": state})
     return items
 
@@ -89,9 +99,11 @@ def write_and_log(ip, cmd, body, action, plate):
 
 
 def add_item(ip, plate, begin, end):
-    if begin > end:
-        raise BadRequest("開始日期不能晚於結束日期")
-    write_and_log(ip, CMD_ADD, record(plate, begin, end, "00:00:00", "23:59:59", "W"), f"網頁新增／更新 {begin}～{end}", plate)
+    """begin、end 是 check_date 回傳的 (日期, 時間)。"""
+    if begin >= end:
+        raise BadRequest("開始時間要早於結束時間")
+    write_and_log(ip, CMD_ADD, record(plate, begin[0], end[0], begin[1], end[1], "W"),
+                  f"網頁新增／更新 {' '.join(begin)}～{' '.join(end)}", plate)
 
 
 def delete_item(ip, plate):
@@ -196,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/add":
             self.run(lambda: add_item(check_ip(body.get("ip", "")), check_plate(body.get("plate", "")),
-                                      check_date(body.get("begin", "")), check_date(body.get("end", ""))))
+                                      check_date(body.get("begin", "")), check_date(body.get("end", ""), end=True)))
         elif path == "/api/delete":
             self.run(lambda: delete_item(check_ip(body.get("ip", "")), check_plate(body.get("plate", ""))))
         elif path == "/api/led":
@@ -245,9 +257,9 @@ h2{font-size:18px;margin:24px 0 8px}h3{font-size:15px;margin:14px 0 6px}
 <button class="ghost" id="reload">重新讀取</button></div></div>
 <div class="card"><div class="row">
 <div><label for="plate">車牌（不用加 -）</label><input id="plate" placeholder="例如 ABC1234" autocomplete="off"></div>
-<div><label for="begin">開始日期</label><input id="begin" type="date"></div>
-<div><label for="end">結束日期</label><input id="end" type="date"></div>
-<button id="add">新增／更新</button></div><div id="msg"></div></div>
+<div><label for="begin">開始（日期時間）</label><input id="begin" type="datetime-local" step="1"></div>
+<div><label for="end">結束（日期時間）</label><input id="end" type="datetime-local" step="1"></div>
+<button id="add">新增／更新</button></div><div id="msg"></div><p class="empty" style="text-align:left;padding:8px 0 0">⚠️ 時間（時:分:秒）攝影機怎麼解讀還沒實機驗證，可能被當成「每天的時段」。正式社區請先維持 00:00:00～23:59:59。</p></div>
 <div class="card"><table><thead><tr><th>車牌</th><th>有效期間</th><th>狀態</th><th></th></tr></thead><tbody id="list"><tr><td colspan="4" class="empty">讀取中…</td></tr></tbody></table></div>
 <h2>字幕機（入口）</h2>
 <div class="card" id="ledcard"><div class="empty">讀取中…</div></div>
@@ -256,7 +268,7 @@ h2{font-size:18px;margin:24px 0 8px}h3{font-size:15px;margin:14px 0 6px}
 </main><script>
 const $=id=>document.getElementById(id);
 const today=new Date(),pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
-$('begin').value=iso(today);const ny=new Date(today);ny.setFullYear(ny.getFullYear()+1);$('end').value=iso(ny);
+$('begin').value=iso(today)+'T00:00:00';const ny=new Date(today);ny.setFullYear(ny.getFullYear()+1);$('end').value=iso(ny)+'T23:59:59';
 function msg(t,ok){$('msg').textContent=t;$('msg').className=ok?'okmsg':'err'}
 async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});return r.json()}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}

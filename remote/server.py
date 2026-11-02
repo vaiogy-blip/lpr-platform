@@ -336,9 +336,10 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 6px;
 <h2>白名單</h2>
 <div class="card"><div class="row">
 <div><label for="plate">車牌（不用加 -）</label><input id="plate" placeholder="例如 ABC1234" autocomplete="off"></div>
-<div><label for="begin">開始日期</label><input id="begin" type="date"></div>
-<div><label for="end">結束日期</label><input id="end" type="date"></div>
+<div><label for="begin">開始（日期時間）</label><input id="begin" type="datetime-local" step="1"></div>
+<div><label for="end">結束（日期時間）</label><input id="end" type="datetime-local" step="1"></div>
 <button id="add">新增／更新</button></div><div class="msg" id="wlmsg"></div>
+<div class="msg muted">⚠️ 時間（時:分:秒）攝影機怎麼解讀還沒實機驗證，可能被當成「每天的時段」。正式社區請先維持 00:00:00～23:59:59。</div>
 <table><thead><tr><th>車牌</th><th>有效期間</th><th>狀態</th><th></th></tr></thead><tbody id="list"></tbody></table></div>
 
 <h2>SD 卡照片</h2>
@@ -378,7 +379,7 @@ $('pw').addEventListener('keydown',e=>{if(e.key==='Enter')$('loginbtn').click()}
 $('logout').onclick=async()=>{await api('/api/logout',{});show(false)};
 $('refresh').onclick=loadAll;$('cam').onchange=()=>{loadWl();loadRestart()};
 const pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
-const t=new Date();$('begin').value=iso(t);const ny=new Date(t);ny.setFullYear(ny.getFullYear()+1);$('end').value=iso(ny);
+const t=new Date();$('begin').value=iso(t)+'T00:00:00';const ny=new Date(t);ny.setFullYear(ny.getFullYear()+1);$('end').value=iso(ny)+'T23:59:59';
 $('pstart').value=iso(t)+'T00:00';$('pend').value=iso(t)+'T23:59';
 $('add').onclick=async()=>{$('add').disabled=true;const p=$('plate').value;const d=await cmd('wl_add',{plate:p,begin:$('begin').value,end:$('end').value});
  $('add').disabled=false;if(d.ok){say('wlmsg','已寫入攝影機：'+p.toUpperCase().replace(/[- ]/g,''),true);$('plate').value=''}else say('wlmsg',d.error,false);loadWl()};
