@@ -123,6 +123,10 @@
 - **RYW 決定：先搞定白名單增刪再繼續其他開發。** 網路查到華夏 2018 年「HTTP POST 功能模式說明」（https://blog.csdn.net/weixin_34248258/article/details/93819587）：心跳／辨識回覆帶 `whitelist_opt_data`，Action＝add／update／delete／deleteAll／query，欄位 PlateNumber、Type（W／B）、Start／End（`YYYY/MM/DD HH:MM:SS`）。該文件的開閘寫法（`ext` device IO1）跟我們實測有效的 `gpio_data` 不同，版本可能較舊。試驗程式已加候選 3（這個格式）與候選 4（另一款一體機的 addWhiteList／deleteWhiteList），用法：`python whitelist_trial_server.py 3 S30438 update｜delete｜add`。
 - 13:37～13:41 實測候選 3（update、add、delete）、候選 4（delete）：**都無效**。**重要線索**：回覆沒有 `error_num` 的（候選 3、4），攝影機約 30 毫秒內就重送心跳＝不接受這個回覆；有 `error_num` 的（候選 1、開閘的 gpio_data）照常 10 秒一次＝接受。推測 1.12 版回覆一定要有 `error_num`。已加候選 5、6（error_num＋whitelist_opt_data，日期分別用 / 和 -）。13:43 候選 5 update：攝影機**接受回覆（沒重送）但沒效果**，跟候選 1 一樣＝欄位名稱不對。程式已改成辨識結果的回覆也帶白名單指令（華夏 2018 文件說兩種回覆都可以），最後一輪試候選 5、1；再不行就停止猜測，等廠商文件或找老闆之前用的工具。13:46 候選 5 搭在心跳＋辨識回覆：攝影機接受、仍無效（S30438 仍逾期）。13:48 候選 1 搭心跳＋辨識回覆：攝影機接受、仍無效。
 - **停止猜測 HTTP 白名單格式（2026-11-02）。** 結論：1.12 版回覆必須有 `error_num` 才會被接受；`white_list_operate`、`whitelist_opt_data`（Action 寫法）都被忽略。
+- **2026-11-02 RYW 提供老闆用過的停車場軟體**（`I:\我的雲端硬碟\技術通報\車牌辨識軟體\PARKING-WIN64(2).zip`，對岸的停車場系統，Java，只讀分析、沒有執行）。發現：
+  - 裡面有**華夏官方 Java SDK `ice_ipcsdk.jar`（純 Java，沒有 DLL）**，有完整白名單功能：WhiteListInsertItem／DeleteItem／EditItem／FindItem／DeleteAllItems／UpdateBatch、上傳 whitelist.txt。白名單欄位：車牌、起訖日期、起訖時間、類型。還有開閘、關閘、485 透傳、對時、抓拍等。
+  - **這套 SDK 是電腦主動連進攝影機（區域網路 TCP）**，所以那套軟體的架構是：社區現場放一台電腦，用 SDK 管攝影機；現場電腦再用 MQTT 跟它們的雲端中心同步。它的 MQTT 是「現場電腦↔雲端」，不是攝影機直接連雲端。
+  - 意義：白名單寫入**確定做得到**，但目前已知的方法要在社區現場有一台小電腦（閘道器）。原設計文件也列過「若必須用 SDK，社區現場加一台小主機做代理」。
 - 下一步候選：(1) 問老闆之前寫白名單用的工具，若是電腦軟體，在筆電上用它寫一次並側錄它送給攝影機的內容；(2) 走 MQTT：在筆電架 MQTT 伺服器，讓攝影機連上來，看它訂閱哪些主題（可能透露白名單指令名稱）；(3) 跟代理商要文件（HTTP 1.12 白名單格式、MQTT 協議、SDK）。判斷方式：除了看黑白名單欄，也看心跳有沒有立刻重送（`captures_whitelist_trial` 檔名時間）。
 - 照片查看（RYW 2026-11-02 提問）：攝影機有 SD 卡，後台有「圖片預覽」頁，透過遠端桌面連到社區網路應該看得到；平台能否遠端取回 SD 卡照片未知，待問廠商（後台另有 FTP 上傳功能可參考）。
 - 其他連帶：LED／語音改由攝影機自己的設定處理（後台有「字幕機參數」）；平台以推送裡的 `is_whitelist` 記錄攝影機有沒有放行；要確認斷網續傳（補傳紀錄）的格式。
