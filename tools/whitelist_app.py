@@ -21,6 +21,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import hx_led
 from hx_whitelist import CMD_ADD, CMD_DELETE, CMD_LIST, log_operation, record, send
 
 PORT = int(os.environ.get("PORT", 8090))
@@ -96,6 +97,18 @@ def delete_item(ip, plate):
     write_and_log(ip, CMD_DELETE, record(plate), "網頁刪除", plate)
 
 
+def save_led(ip, view):
+    if not isinstance(view, dict):
+        raise BadRequest("字幕機資料格式錯誤")
+    try:
+        result = hx_led.write(ip, view)
+    except (ValueError, KeyError, TypeError) as e:
+        log_operation(ip, f"網頁改字幕機（失敗：{e}）", "-")
+        raise BadRequest(str(e) if isinstance(e, ValueError) else "字幕機資料格式錯誤")
+    log_operation(ip, "網頁改字幕機（成功）", "-")
+    return {"led": result}
+
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 10  # 慢速連線不要一直佔著
 
@@ -134,6 +147,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/list":
             ip = parse_qs(url.query).get("ip", [""])[0]
             self.run(lambda: {"items": list_whitelist(check_ip(ip))})
+        elif url.path == "/api/led":
+            ip = parse_qs(url.query).get("ip", [""])[0]
+            self.run(lambda: {"led": hx_led.to_view(hx_led.read_raw(check_ip(ip)))})
         else:
             self.reply(404, "text/plain; charset=utf-8", b"not found")
 
@@ -158,6 +174,8 @@ class Handler(BaseHTTPRequestHandler):
                                       check_date(body.get("begin", "")), check_date(body.get("end", ""))))
         elif path == "/api/delete":
             self.run(lambda: delete_item(check_ip(body.get("ip", "")), check_plate(body.get("plate", ""))))
+        elif path == "/api/led":
+            self.run(lambda: save_led(check_ip(body.get("ip", "")), body.get("led")))
         else:
             self.reply_json(404, {"ok": False, "error": "not found"})
 
@@ -167,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
 
 PAGE = """<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>白名單管理（單機試用）</title>
+<title>車道管理（單機試用）</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--text:#1d2129;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--ok:#15803d;--warn:#b45309;--bad:#b91c1c}
 @media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1e25;--text:#e8eaed;--muted:#9aa0a6;--line:#2c313a;--accent:#60a5fa;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
@@ -186,9 +204,16 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 6px
 .top{display:flex;gap:10px;align-items:end}.top div{flex:1}
 #msg{min-height:24px;font-size:14px;margin-top:10px}.err{color:var(--bad)}.okmsg{color:var(--ok)}
 .empty{color:var(--muted);text-align:center;padding:20px}
+h2{font-size:18px;margin:24px 0 8px}h3{font-size:15px;margin:14px 0 6px}
+.ledline{display:grid;grid-template-columns:52px 1fr 1.4fr 70px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.ledline:last-child{border-bottom:0}.ln{color:var(--muted);font-size:13px}
+.chk{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:14px}.chk label{display:inline-flex;align-items:center;gap:4px;margin:0;color:var(--text);font-size:14px}
+.chk input,.opt input{width:auto}select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text);font-size:15px}
+.opt{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:14px}.opt label{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);font-size:14px}
+@media (max-width:600px){.ledline{grid-template-columns:1fr 1fr}.ln{grid-column:span 2}}
 </style></head><body><main>
-<h1>白名單管理</h1>
-<p class="sub">單機試用版：直接改攝影機裡的白名單，改完立刻生效。⚠️ 白名單的車到場會自動開閘。</p>
+<h1>車道管理</h1>
+<p class="sub">單機試用版：直接改攝影機裡的白名單和字幕機，改完立刻生效。⚠️ 白名單的車到場會自動開閘。</p>
 <div class="card"><div class="top"><div><label for="ip">攝影機 IP</label><input id="ip" value="{{CAMERA}}"></div>
 <button class="ghost" id="reload">重新讀取</button></div></div>
 <div class="card"><div class="row">
@@ -197,6 +222,8 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 6px
 <div><label for="end">結束日期</label><input id="end" type="date"></div>
 <button id="add">新增／更新</button></div><div id="msg"></div></div>
 <div class="card"><table><thead><tr><th>車牌</th><th>有效期間</th><th>狀態</th><th></th></tr></thead><tbody id="list"><tr><td colspan="4" class="empty">讀取中…</td></tr></tbody></table></div>
+<h2>字幕機（入口）</h2>
+<div class="card" id="ledcard"><div class="empty">讀取中…</div></div>
 </main><script>
 const $=id=>document.getElementById(id);
 const today=new Date(),pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
@@ -217,7 +244,33 @@ $('add').onclick=async()=>{const b=$('add');b.disabled=true;
  const d=await api('/api/add',{ip:$('ip').value.trim(),plate:$('plate').value,begin:$('begin').value,end:$('end').value});
  b.disabled=false;if(d.ok){msg('已寫入攝影機：'+$('plate').value.toUpperCase().replace(/[- ]/g,''),true);$('plate').value=''}else msg(d.error,false);load()};
 $('plate').addEventListener('keydown',e=>{if(e.key==='Enter')$('add').click()});
-$('reload').onclick=load;load();
+const COLORS=['紅','綠','黃'],MODES={0:'離線時才顯示',1:'一律顯示',2:'不使用'};
+const IDLE=[['time','時間'],['date','日期'],['idle','自訂文字']],BUSY=[['plate','車牌'],['type','車輛類型'],['days','月租剩餘天數'],['busy','自訂文字']];
+let led=null;
+function colorSel(v,cls,i){return '<select class="'+cls+'" data-i="'+i+'">'+COLORS.map((c,k)=>'<option value="'+k+'"'+(k==v?' selected':'')+'>'+c+'</option>').join('')+'</select>'}
+function lineRows(kind,flags){return led.lines.map((l,i)=>'<div class="ledline"><span class="ln">第'+(i+1)+'行</span><div class="chk">'+
+ flags.map(([f,n])=>'<label><input type="checkbox" class="'+kind+'" data-i="'+i+'" data-f="'+f+'"'+(l[kind][f]?' checked':'')+'>'+n+'</label>').join('')+
+ '</div><input class="'+kind+'_text" data-i="'+i+'" value="'+esc(l[kind+'_text'])+'" placeholder="自訂文字">'+colorSel(l[kind+'_color'],kind+'_color',i)+'</div>').join('')}
+function renderLed(){const c=$('ledcard');
+ c.innerHTML='<div class="opt"><label>顯示方式 <select id="ledmode">'+Object.entries(MODES).map(([k,n])=>'<option value="'+k+'"'+(k==led.mode?' selected':'')+'>'+n+'</option>').join('')+'</select></label>'+
+ '<span class="ln">協定 '+led.protocol+'</span></div>'+
+ '<h3>沒有車的時候</h3>'+lineRows('idle',IDLE)+'<h3>車子來的時候</h3>'+lineRows('busy',BUSY)+
+ '<h3>語音</h3><div class="opt"><label><input type="checkbox" id="vplate"'+(led.voice_plate?' checked':'')+'>播報車牌</label>'+
+ '<label><input type="checkbox" id="vwel"'+(led.voice_welcome_on?' checked':'')+'>歡迎語</label><select id="vweltext">'+
+ [...new Set([led.voice_welcome,'歡迎光臨','歡迎回家'])].map(w=>'<option'+(w==led.voice_welcome?' selected':'')+'>'+esc(w)+'</option>').join('')+'</select></div>'+
+ '<div class="opt" style="margin-top:14px"><button id="ledsave">儲存到攝影機</button><button class="ghost" id="ledreload">重新讀取</button></div><div id="ledmsg"></div>';
+ $('ledsave').onclick=saveLed;$('ledreload').onclick=loadLed}
+function ledMsg(t,ok){$('ledmsg').textContent=t;$('ledmsg').className=ok?'okmsg':'err'}
+async function loadLed(){$('ledcard').innerHTML='<div class="empty">讀取中…</div>';
+ const d=await api('/api/led?ip='+encodeURIComponent($('ip').value.trim()));
+ if(!d.ok){$('ledcard').innerHTML='<div class="empty err">'+esc(d.error)+'</div>';return}led=d.led;renderLed()}
+async function saveLed(){const v=JSON.parse(JSON.stringify(led)),q=s=>document.querySelectorAll('#ledcard '+s);
+ v.mode=+$('ledmode').value;v.voice_plate=$('vplate').checked;v.voice_welcome_on=$('vwel').checked;v.voice_welcome=$('vweltext').value;
+ for(const k of ['idle','busy']){q('input.'+k).forEach(e=>v.lines[e.dataset.i][k][e.dataset.f]=e.checked);
+  q('.'+k+'_text').forEach(e=>v.lines[e.dataset.i][k+'_text']=e.value);q('.'+k+'_color').forEach(e=>v.lines[e.dataset.i][k+'_color']=+e.value)}
+ $('ledsave').disabled=true;const d=await api('/api/led',{ip:$('ip').value.trim(),led:v});
+ if(d.ok){led=d.led;renderLed();ledMsg('已存到攝影機，字幕機會馬上更新',true)}else{$('ledsave').disabled=false;ledMsg(d.error,false)}}
+$('reload').onclick=()=>{load();loadLed()};load();loadLed();
 </script></body></html>
 """
 
