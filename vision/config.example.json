@@ -5,14 +5,17 @@
   "camera_port": 554,
   "camera_user": "admin",
   "camera_password": "在這裡填密碼",
-  "_camera_說明": "上面是共用的（錄影主機同一個 IP、帳密）；下面每支攝影機沒寫的欄位就用上面的",
+  "_camera_說明": "上面是共用的（錄影主機的 IP、帳密）；下面每支攝影機沒寫的欄位就用上面的",
+
+  "rtsp_path": "/user={user}&password={password}&channel={channel}&stream=0.sdp?real_stream",
+  "_rtsp_path_說明": "雄邁（XMeye）NVR 的格式，{user} {password} {channel} 程式會自動換成上面的帳密和下面的路數，不用改。stream=0 是主碼流（畫質最好）。其他品牌：海康 /Streaming/Channels/{channel}01；大華 /cam/realmonitor?channel={channel}&subtype=0",
 
   "cameras": [
-    {"name": "顧車", "rtsp_path": "填第3路的路徑", "motion": true, "snapshot_interval_s": 60},
-    {"name": "金爐", "rtsp_path": "填第2路的路徑", "motion": true, "snapshot_interval_s": 60},
-    {"name": "巷弄機車", "rtsp_path": "填第4路的路徑", "motion": true, "snapshot_interval_s": 60}
+    {"name": "金爐", "channel": 2},
+    {"name": "顧車", "channel": 3},
+    {"name": "巷弄機車", "channel": 4}
   ],
-  "_rtsp_path_常見": "海康 /Streaming/Channels/301（第3路主碼流）；大華 /cam/realmonitor?channel=3&subtype=0；雄邁(XMeye) /user=帳號&password=密碼&channel=3&stream=0.sdp",
+  "_cameras_說明": "channel 是 NVR 的第幾路（四分割通常：左上 1、右上 2、左下 3、右下 4，以 NVR 上的編號為準）",
 
   "data_dir": "data",
   "retention_days": 90,
@@ -21,13 +24,14 @@
   "roi": [0.0, 0.06, 1.0, 0.92],
   "_roi_說明": "只看畫面這個範圍（0～1 比例：左、上、右、下），用來排除疊印的時間、攝影機名稱。每支攝影機也可以各自寫 roi",
 
+  "snapshot_interval_s": 60,
   "motion_threshold": 0.015,
   "sample_interval_s": 0.4,
   "max_frames_per_event": 5,
   "event_gap_s": 2.0,
   "max_event_s": 20,
   "repeat_save_s": 3600,
-  "_repeat_save_s_說明": "定時拍照時，同一支攝影機、同一個車牌字幾秒內只存一次（停著的車才不會整天重複存）",
+  "_repeat_save_s_說明": "定時拍照時，同一支攝影機、同一台車幾秒內只存一次（停著的車才不會整天重複存）",
   "min_plate_height": 12,
   "save_full_frame": true
 }

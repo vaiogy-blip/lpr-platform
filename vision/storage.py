@@ -26,7 +26,7 @@ DEFAULTS = {
     "camera_port": 554,
     "camera_user": "",
     "camera_password": "",
-    "rtsp_path": "/Streaming/Channels/101",
+    "rtsp_path": "/user={user}&password={password}&channel={channel}&stream=0.sdp?real_stream",
     "data_dir": "data",
     "retention_days": 90,
     "min_free_gb": 20,

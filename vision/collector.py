@@ -45,7 +45,7 @@ MOTION_FPS_GAP = 0.12    # 偵測動靜每秒看約 8 張就夠
 STATUS_EVERY_S = 60
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)),
                     *(f"LPT{i}" for i in range(10))}
-CAMERA_KEYS = ("host", "port", "user", "password", "rtsp_path", "roi",
+CAMERA_KEYS = ("host", "port", "user", "password", "rtsp_path", "channel", "roi",
                "motion", "snapshot_interval_s")
 
 
@@ -55,7 +55,7 @@ def camera_list(cfg):
     """把設定整理成攝影機清單。每支沒寫的欄位沿用最外層的 camera_*（錄影主機共用帳密時很方便）。"""
     base = {"host": cfg["camera_host"], "port": cfg["camera_port"], "user": cfg["camera_user"],
             "password": cfg["camera_password"], "rtsp_path": cfg["rtsp_path"], "roi": cfg["roi"],
-            "motion": True, "snapshot_interval_s": cfg["snapshot_interval_s"]}
+            "channel": 1, "motion": True, "snapshot_interval_s": cfg["snapshot_interval_s"]}
     cams = cfg.get("cameras") or [{"name": "cam1"}]
     out = []
     for i, c in enumerate(cams):
@@ -71,10 +71,15 @@ def camera_list(cfg):
 
 
 def rtsp_url(cam):
+    """組 RTSP 網址。rtsp_path 可用 {user} {password} {channel}：
+    雄邁（XMeye）的帳密寫在路徑裡，這樣密碼仍只填在 camera_password 一個地方。"""
     user = quote(str(cam["user"]), safe="")
     pw = quote(str(cam["password"]), safe="")
-    auth = f"{user}:{pw}@" if user else ""
-    path = cam["rtsp_path"] if cam["rtsp_path"].startswith("/") else "/" + cam["rtsp_path"]
+    path = str(cam["rtsp_path"])
+    in_path = "{password}" in path
+    path = path.replace("{user}", user).replace("{password}", pw).replace("{channel}", str(cam["channel"]))
+    path = path if path.startswith("/") else "/" + path
+    auth = f"{user}:{pw}@" if user and not in_path else ""
     return f"rtsp://{auth}{cam['host']}:{cam['port']}{path}"
 
 
