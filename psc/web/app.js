@@ -88,12 +88,16 @@ async function companyPicker() {
 const cid = () => pickedCompany || me.company_id;
 
 // ---------- 總覽 ----------
+let dashTimer = null;
 async function viewDashboard() {
   const d = await api('dashboard');
   if (!d.ok) return main().innerHTML = '<p class="bad">' + esc(d.error) + '</p>';
+  // 停在總覽時每 30 秒自動更新數字與上線狀態
+  clearTimeout(dashTimer);
+  dashTimer = setTimeout(() => { if (location.hash.replace(/^#\//, '').split('/')[0] in {'': 1, dashboard: 1} && $('dashboard')) viewDashboard(); }, 30000);
   const c = d.counts;
   const stat = (n, label, cls) => '<div class="stat"><b class="' + (cls || '') + '">' + n + '</b><span>' + label + '</span></div>';
-  let html = '<h1>總覽</h1><p class="muted">' + esc(me.company_name) + (me.is_root ? '（主控，看得到全部公司）' : '') + '</p><div class="grid">' +
+  let html = '<h1 id="dashboard">總覽</h1><p class="muted">' + esc(me.company_name) + (me.is_root ? '（主控，看得到全部公司）' : '') + '</p><div class="grid">' +
     (me.is_root ? stat(c.companies, '公司') : '') + stat(c.sites, '場站') +
     stat(c.gateways_online + ' / ' + c.gateways, '小主機線上', c.gateways_online < c.gateways ? 'bad' : 'ok') +
     stat(c.cameras, '攝影機') + stat(c.sites_offline, '場站有斷線', c.sites_offline ? 'bad' : '') +
@@ -466,22 +470,31 @@ async function viewEvents(siteId) {
     sd.sites.map(x => '<option value="' + x.id + '"' + (x.id === siteId ? ' selected' : '') + '>' + esc(x.name) + (me.is_root ? '（' + esc(x.company_name) + '）' : '') + '</option>').join('') + '</select></div>' +
     '<div><label for="edate">日期</label><input id="edate" type="date" value="' + isoDate(new Date()) + '"></div>' +
     '<div><label for="eplate">車牌（可只打一部分）</label><input id="eplate" autocomplete="off"></div>' +
-    '<div class="radio"><label><input type="checkbox" id="eabn">只看非白名單</label></div><div><button id="eq">查詢</button></div></div>' +
+    '<div class="radio"><label><input type="checkbox" id="eabn">只看非白名單</label><label><input type="checkbox" id="eauto" checked>每 10 秒自動更新</label></div><div><button id="eq">查詢</button></div></div>' +
     '<p class="small muted">白名單車不存照片；非白名單車才存照片。查詢與看照片都會留紀錄。</p></div>' +
     '<div class="msg" id="emsg"></div><div class="card scroll"><table><thead><tr><th>時間</th><th>場站／攝影機</th><th>車牌</th><th>進出</th><th>白名單</th><th></th></tr></thead><tbody id="elist"></tbody></table></div>' +
     '<img id="eimg" class="photo-big hidden" alt="進出照片">';
-  const load = async () => {
-    busy($('eq'), true);
-    const d = await api('events', {site_id: $('esite').value ? +$('esite').value : null, date: $('edate').value, plate: $('eplate').value.trim(), abnormal_only: $('eabn').checked});
+  let lastId = null;  // 自動更新時，新進來的車標顏色
+  const load = async auto => {
+    if (!auto) { busy($('eq'), true); lastId = null; }
+    const d = await api('events', {site_id: $('esite').value ? +$('esite').value : null, date: $('edate').value, plate: $('eplate').value.trim(),
+      abnormal_only: $('eabn').checked, auto: auto === true});
     if (!$('elist')) return;
     busy($('eq'), false);
+    const prev = lastId;
+    lastId = d.ok && d.rows.length ? Math.max(...d.rows.map(r => r.id)) : lastId;
     if (!d.ok) return say($('emsg'), d.error);
     say($('emsg'), d.date + ' 共 ' + d.rows.length + ' 筆' + (d.rows.length >= 500 ? '（只列最新 500 筆，請縮小範圍）' : ''), true);
-    $('elist').innerHTML = d.rows.map(r => '<tr><td>' + esc(r.ts.slice(11)) + '</td><td>' + esc(r.site_name) + '<div class="small muted">' + esc(r.camera_name) + '</div></td><td><b>' + esc(r.plate) + '</b></td><td>' +
+    $('elist').innerHTML = d.rows.map(r => '<tr' + (prev !== null && r.id > prev ? ' class="newrow"' : '') + '><td>' + esc(r.ts.slice(11)) + '</td><td>' + esc(r.site_name) + '<div class="small muted">' + esc(r.camera_name) + '</div></td><td><b>' + esc(r.plate) + '</b></td><td>' +
       (r.direction === 'out' ? '出' : '進') + '</td><td class="' + (r.is_whitelist ? 'ok' : 'warn') + '">' + (r.is_whitelist ? '是' : '否') + '</td><td>' +
       (r.has_photo && can('photo.view') ? '<button class="ghost sm" data-eid="' + r.id + '">照片</button>' : '') + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">這一天沒有紀錄</td></tr>';
   };
-  $('eq').addEventListener('click', load);
+  $('eq').addEventListener('click', () => load(false));
+  // 停在這頁、看的是今天時，每 10 秒自動抓一次；離開這頁就停
+  const timer = setInterval(() => {
+    if (!$('elist')) return clearInterval(timer);
+    if ($('eauto').checked && $('edate').value === isoDate(new Date()) && !document.hidden) load(true);
+  }, 10000);
   $('elist').addEventListener('click', async e => {
     const id = e.target.dataset.eid; if (!id) return;
     e.target.disabled = true;
@@ -491,7 +504,7 @@ async function viewEvents(siteId) {
     if (!d.ok) return say($('emsg'), d.error);
     $('eimg').src = 'data:image/jpeg;base64,' + d.jpeg_b64; $('eimg').classList.remove('hidden'); $('eimg').scrollIntoView({behavior: 'smooth'});
   });
-  load();
+  load(false);
 }
 
 // ---------- 客戶公司 ----------

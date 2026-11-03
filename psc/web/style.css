@@ -60,3 +60,4 @@ summary{cursor:pointer;font-weight:600}
 .site>div:last-child{white-space:nowrap}
 .row input.auto{min-width:240px;flex:1}
 .filebtn{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:6px;color:var(--accent);cursor:pointer;margin:0}
+tr.newrow td{background:var(--accent-soft)}

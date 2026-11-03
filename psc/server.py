@@ -441,10 +441,11 @@ def api_events(h, user, body):
     rows = db.q(sql + " ORDER BY e.ts DESC, e.id DESC LIMIT 500", args)
     for r in rows:
         r["site_name"] = sites[r["site_id"]]["name"]
-    # 進出紀錄是個資：誰查了哪一天、哪個場站要留紀錄
+    # 進出紀錄是個資：誰查了哪一天、哪個場站要留紀錄（同一畫面每 10 秒的自動更新不重複記，打開／按查詢時才記）
     target = sites[site_id]["name"] if site_id is not None else "全部場站"
-    db.audit(user, h.client_ip(), "查進出紀錄", target, f"{date} {plate}".strip(), f"{len(rows)} 筆",
-             company_id=sites[site_id]["company_id"] if site_id is not None else None, site_id=site_id)
+    if body.get("auto") is not True:
+        db.audit(user, h.client_ip(), "查進出紀錄", target, f"{date} {plate}".strip(), f"{len(rows)} 筆",
+                 company_id=sites[site_id]["company_id"] if site_id is not None else None, site_id=site_id)
     return {"rows": rows, "date": date}
 
 
