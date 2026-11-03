@@ -306,5 +306,11 @@ RYW 的筆電會在公司與家裡之間移動，攝影機留在公司（192.168
   3. PSC 用環境變數 `PSC_HOSTS=psc.公司網域` 允許這個網域。
   4. 公司電腦 `gateway_config.json` 的 server 改成固定網址（最後一次改）。
 - **使用者已了解流量**：Cloudflare 通道和子網域免費、沒有流量上限，不經過公司網站主機，不吃公司網域或網站的額度。流量算在筆電（家裡網路）和小主機（公司網路）兩端，一台攝影機估計一天約 30MB。
-- 使用者還要決定：子網域名稱；是否同意在公司網域新增這一筆 DNS 紀錄（做之前要再確認一次）。
+- **2026-11-03 試過，卡住，使用者決定先不做**：
+  - 子網域原本定 `psc.jia-hui.com.tw`。
+  - `cloudflared tunnel login` 授權頁的網域清單是空的。原因：jia-hui.com.tw 是 10/29 在網路中文開「DNS代管」，代管背後用 Cloudflare（名稱伺服器 alex／marjory），但這個網域**不在使用者自己的 Cloudflare 帳號（jiahui.workgroup）裡**。
+  - ERP 能用 erp.jia-hui.com.tw，是因為 Cloudflare Pages 的自訂網域只要在外部 DNS 加 CNAME 就好；通道沒辦法這樣做，網域一定要在自己的帳號裡。
+  - 要做的兩條路：(a) 把 jia-hui.com.tw 免費搬進 jiahui.workgroup 的 Cloudflare：先複製官網、www、erp 的紀錄，再請使用者到網路中文改名稱伺服器；切換時官網和 ERP 可能短暫中斷，要下班後做。(b) 另外在 Cloudflare 買 PSC 專用網域，.com 一年約 NT$330。
+  - 使用者說「這麼麻煩那先不要」，**目前繼續用臨時網址**。筆電重開後要重開 PSC 與臨時通道，並改公司電腦設定檔裡的 server 網址。
+  - 注意：`C:\PSc` 已改成只有系統管理員能改，要用系統管理員身分編輯 gateway_config.json，再在工作排程器重新執行 PSC-Gateway，或直接重開機。
 - 其他可以在家做的（使用者還沒選）：收費停車場第一階段（費率、試算、在場車輛、模擬進出）、進出紀錄加強（自動更新、匯出、跨日查車牌）、手機驗證碼（2FA）。
